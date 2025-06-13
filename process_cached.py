@@ -6,21 +6,21 @@ from typing import Optional, Dict, Any
 from diskcache import Cache
 
 # --- Настройка логирования ---
-# Простое логирование в консоль для отладки
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Константы ---
+# --- Константы кэшей ---
 SOURCE_CACHE_DIR = 'sms_cache'
-PROCESSED_CACHE_DIR = 'parsed_sms_cache'
+PURCHASE_CACHE_DIR = 'parsed_sms_cache'  # для сообщений о покупках/списаниях
+CREDIT_CACHE_DIR = 'credit_sms_cache'    # для сообщений о зачислениях
 
-# --- Регулярное выражение и функция парсинга (предоставлены вами) ---
-# Немного модифицируем re для большей гибкости с пробелами и валютами
+# --- Регулярные выражения ---
+# Покупка / списание
 TRANSACTION_RE = re.compile(
     r"""
-    ^.*?  # Не захватываем мусор в начале, если он есть
-    (?:PURCHASE|SALE):\s*
-    (?P<merchant>.+?),\s*YEREVAN,\s*
-    (?P<address>.*?)(?=,\s*\d{2}[./-]\d{2}[./-]\d{2,4}\s)  # Адрес до даты
+    ^.*?                              # любой мусор в начале
+    (?:PURCHASE|SALE):\s*            # ключевое слово
+    (?P<merchant>.+?),\s*YEREVAN,\s* # название магазина
+    (?P<address>.*?)(?=,\s*\d{2}[./-]\d{2}[./-]\d{2,4}\s) # адрес до даты
     ,\s*(?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})\s+
     (?P<time>\d{2}:\d{2}),\s*
     card\ \*{3}(?P<card>\d{4})\.\s*
@@ -31,119 +31,143 @@ TRANSACTION_RE = re.compile(
     re.VERBOSE | re.IGNORECASE | re.DOTALL,
 )
 
+# Зачисление / платеж
+CREDIT_PAYMENT_RE = re.compile(r"""
+    ^.*?                              # произвольное начало
+    (?P<type>[\w\s]+?):\s*            # тип транзакции
+    (?P<date>\d{2}[./-]\d{2}[./-]\d{2,4})\s+
+    (?P<time>\d{2}:\d{2}),\s*
+    card\s+\*{3}(?P<card>\d{4})\.\s*
+    Amount:\s*(?P<amount>[\d.,]+)\s+
+    (?P<currency>\w{3}),\s*           # код валюты суммы (USD и т.-д.)
+    Balance:\s*(?P<balance>[\d.,]+)\s+
+    (?:\w{3})\s*$                     # код валюты баланса, игнорируем
+""", re.VERBOSE | re.IGNORECASE)
+
+# --- Парсеры ---
+
+def _to_decimal(value: str) -> Decimal:
+    """Преобразуем строку-число, убирая разделители тысяч."""
+    return Decimal(value.replace(',', ''))
+
+
 def parse_transaction_message(message: str) -> Optional[Dict[str, Any]]:
-    """
-    Разбирает SMS-уведомление от банка в структурированные данные.
-    
-    Возвращает None, если сообщение не соответствует шаблону.
-    В случае ошибок парсинга чисел возвращает None.
-    """
+    """Парсит SMS о покупке/списании."""
     if not message:
         return None
-        
     match = TRANSACTION_RE.search(message)
     if not match:
         return None
-        
     g = match.groupdict()
     try:
-        # Убираем запятые-разделители тысяч для корректной конвертации
-        amount = Decimal(g["amount"].replace(",", ""))
-        balance = Decimal(g["balance"].replace(",", ""))
-        
         return {
-            "merchant": g["merchant"].strip(),
-            "city": "YEREVAN",
-            "address": g["address"].strip() or "N/A",
-            "date": g["date"].strip(),
-            "time": g["time"].strip(),
-            "card": f"***{g['card']}",
-            "amount": float(amount),
-            "currency": g["currency"].strip(),
-            "balance": float(balance),
+            'direction': 'debit',
+            'merchant': g['merchant'].strip(),
+            'city': 'YEREVAN',
+            'address': g['address'].strip() or 'N/A',
+            'date': g['date'].strip(),
+            'time': g['time'].strip(),
+            'card': f"***{g['card']}",
+            'amount': float(_to_decimal(g['amount'])),
+            'currency': g['currency'].strip(),
+            'balance': float(_to_decimal(g['balance'])),
         }
     except (InvalidOperation, TypeError) as exc:
-        logging.error(f"Не удалось преобразовать число в сообщении. Ошибка: {exc}. Текст: {message}")
+        logging.error("Ошибка конвертации суммы/баланса: %s. Текст: %s", exc, message)
         return None
 
-def process_sms_from_cache(source_dir: str, dest_dir: str):
-    """
-    Обрабатывает сообщения из исходного кэша и сохраняет результаты в целевой кэш.
-    """
-    # Используем одну транзакцию для source_cache для атомарного обновления
-    with Cache(source_dir) as source_cache, Cache(dest_dir) as dest_cache:
-        logging.info(f"Начало обработки сообщений из кэша: {source_dir}")
-        
-        processed_count = 0
-        failed_count = 0
-        skipped_count = 0
 
-        # Итерируемся по всем ключам в исходном кэше
-        # Преобразуем в list, чтобы избежать проблем с изменением кэша во время итерации
+def parse_credit_message(message: str) -> Optional[Dict[str, Any]]:
+    """Парсит SMS о зачислении средств или платеже."""
+    if not message:
+        return None
+    match = CREDIT_PAYMENT_RE.search(message)
+    if not match:
+        return None
+    g = match.groupdict()
+    try:
+        return {
+            'direction': 'credit',
+            'type': g['type'].strip().upper(),
+            'date': g['date'].strip(),
+            'time': g['time'].strip(),
+            'card': f"***{g['card']}",
+            'amount': float(_to_decimal(g['amount'])),
+            'currency': g['currency'].strip(),
+            'balance': float(_to_decimal(g['balance'])),
+        }
+    except (InvalidOperation, TypeError) as exc:
+        logging.error("Ошибка конвертации суммы/баланса: %s. Текст: %s", exc, message)
+        return None
+
+# --- Основная обработка ---
+
+def process_sms_from_cache(source_dir: str, purchase_dest_dir: str, credit_dest_dir: str):
+    """Обрабатывает все сообщения из SOURCE_CACHE_DIR и раскладывает по двум кэшам."""
+    with Cache(source_dir) as source_cache, Cache(purchase_dest_dir) as purchase_cache, Cache(credit_dest_dir) as credit_cache:
+        logging.info("Начало обработки сообщений из кэша: %s", source_dir)
+
+        stats = {
+            'processed_debit': 0,
+            'processed_credit': 0,
+            'failed': 0,
+            'skipped': 0,
+        }
+
         for key in list(source_cache):
             message_data = source_cache.get(key)
-            
-            # 1. Проверяем, было ли сообщение обработано ранее
-            if message_data.get('status') == 'processed' :
-                skipped_count += 1
+            if message_data.get('status') == 'processed':
+                stats['skipped'] += 1
                 continue
-            
-            body_text = message_data.get('body')
-            
-            # 2. Применяем парсинг
-            parsed_data = parse_transaction_message(body_text)
-            
-            # 3. Если парсинг успешен
-            if parsed_data:
-                # 4. Создаем ключ-хэш и сохраняем в новый кэш
-                body_hash = hashlib.sha256(body_text.encode('utf-8')).hexdigest()
-                
-                # Добавляем в распарсенные данные оригинальный ключ для связности
-                parsed_data['original_key'] = key
-                parsed_data['original_body'] = body_text
 
-                dest_cache.set(body_hash, parsed_data)
-                
-                # 5. Обновляем статус в исходном кэше
-                message_data['status'] = 'processed'
-                source_cache.set(key, message_data)
-                processed_count += 1
+            body_text = message_data.get('body', '')
+
+            # Сначала пытаемся как покупку/списание
+            parsed = parse_transaction_message(body_text)
+            target_cache = purchase_cache
+            if parsed:
+                stats['processed_debit'] += 1
             else:
-                # 6. Если парсинг неуспешен, обновляем статус
-                message_data['status'] = 'failed_to_parse'
-                source_cache.set(key, message_data)
-                failed_count += 1
-        
-        logging.info("Обработка завершена.")
-        logging.info(f"Успешно обработано: {processed_count}")
-        logging.info(f"Не удалось распознать: {failed_count}")
-        logging.info(f"Пропущено ранее обработанных: {skipped_count}")
+                # Если не получилось, пробуем как кредит
+                parsed = parse_credit_message(body_text)
+                target_cache = credit_cache
+                if parsed:
+                    stats['processed_credit'] += 1
 
-def verify_processed_cache(cache_dir: str):
-    """
-    Проверяет и выводит несколько записей из кэша обработанных сообщений.
-    """
-    logging.info("\n--- Проверка кэша обработанных сообщений ---")
+            if parsed:
+                body_hash = hashlib.sha256(body_text.encode('utf-8')).hexdigest()
+                parsed['original_key'] = key
+                parsed['original_body'] = body_text
+                target_cache.set(body_hash, parsed)
+                message_data['status'] = 'processed'
+            else:
+                message_data['status'] = 'failed_to_parse'
+                stats['failed'] += 1
+
+            source_cache.set(key, message_data)
+
+        logging.info(
+            "Обработка завершена. Покупки: %d, Зачисления: %d, Ошибки: %d, Пропущено: %d",
+            stats['processed_debit'], stats['processed_credit'], stats['failed'], stats['skipped']
+        )
+
+# --- Вспомогательная проверка ---
+
+def verify_processed_cache(cache_dir: str, label: str):
+    logging.info("\n--- Проверка кэша %s ---", label)
     with Cache(cache_dir) as cache:
-        # **ИСПРАВЛЕНИЕ ЗДЕСЬ:** Итерируемся по ключам и получаем значение для каждого.
         keys = list(cache)
         if not keys:
-            logging.warning("Кэш обработанных сообщений пуст.")
+            logging.warning("Кэш '%s' пуст.", label)
             return
-
-        logging.info(f"Всего записей в кэше: {len(keys)}")
-        count = 0
-        for key in keys:
-            value = cache.get(key) # Получаем значение по ключу
-            logging.info(f"Найдена запись с ключом (хэш): {key[:15]}...")
-            logging.info(f"  Данные: {value}")
-            count += 1
-            if count >= 3: # Показываем не более 3 записей для примера
-                break
+        logging.info("Всего записей в '%s': %d", label, len(keys))
+        for key in keys[:3]:  # показываем до 3 записей
+            logging.info("Запись %s: %s", key[:15] + '...', cache.get(key))
 
 
 if __name__ == '__main__':
-    process_sms_from_cache(SOURCE_CACHE_DIR, PROCESSED_CACHE_DIR)
-    
-    # --- Блок для верификации (необязательно) ---
-    verify_processed_cache(PROCESSED_CACHE_DIR)
+    process_sms_from_cache(SOURCE_CACHE_DIR, PURCHASE_CACHE_DIR, CREDIT_CACHE_DIR)
+
+    # Проверка содержимого кэшей (необязательно)
+    verify_processed_cache(PURCHASE_CACHE_DIR, 'покупки/списания')
+    verify_processed_cache(CREDIT_CACHE_DIR, 'зачисления')

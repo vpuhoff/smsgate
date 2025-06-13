@@ -1,130 +1,163 @@
+""" 
+Скрипт синхронизации локальных кэшей DiskCache с PocketBase. 
+
+ * parsed_sms_cache  -> коллекция `sms_data`     (покупки/списания)
+ * credit_sms_cache  -> коллекция `transactions` (зачисления)
+
+Перед использованием задайте переменные окружения:
+    PB_URL, PB_EMAIL, PB_PASSWORD
+"""
+
 import os
 import logging
 from datetime import datetime
+from typing import Dict, Any, Optional
+
 from diskcache import Cache
 from pocketbase import PocketBase
 
-# --- Настройка логирования ---
+# --- Настройка логирования ---------------------------------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Конфигурация Pocketbase ---
-# ВАЖНО: Для реального проекта используйте переменные окружения, а не храните пароли в коде!
-POCKETBASE_URL = os.environ.get("PB_URL", "http://127.0.0.1:8090") # URL вашего Pocketbase
-POCKETBASE_EMAIL = os.environ.get("PB_EMAIL") # Email администратора
-POCKETBASE_PASSWORD = os.environ.get("PB_PASSWORD") # Пароль администратора
+# --- Конфигурация PocketBase -------------------------------------------------
+PB_URL      = os.environ.get("PB_URL", "http://127.0.0.1:8090")
+PB_EMAIL    = os.environ.get("PB_EMAIL", None)
+PB_PASSWORD = os.environ.get("PB_PASSWORD", None)
 
-# --- Константы ---
-PROCESSED_CACHE_DIR = 'parsed_sms_cache'
-POCKETBASE_COLLECTION = 'sms_data' # Название вашей коллекции
+# --- Локальные кэши ----------------------------------------------------------
+PURCHASE_CACHE_DIR = "parsed_sms_cache"   # дебет (покупки/списания)
+CREDIT_CACHE_DIR   = "credit_sms_cache"   # кредит (зачисления)
 
-def format_datetime_for_pb(date_str: str, time_str: str) -> str:
-    """
-    Преобразует отдельные строку даты и времени в стандартный формат Pocketbase.
-    Пример: "14.02.2024", "12:47" -> "2024-02-14 12:47:00"
-    """
-    try:
-        # Пытаемся распознать разные разделители в дате
-        dt_obj = datetime.strptime(f"{date_str.replace('.24', '.2024').replace('.25', '.2025')} {time_str}", "%d.%m.%Y %H:%M")
-    except ValueError:
+# --- Карта кэш -> коллекция + трансформер ------------------------------------
+# Функция-трансформер получает запись из кэша и возвращает payload для PB
+
+def _dt_str(date: str, time_: str) -> Optional[str]:
+    """Преобразует d.m.Y + HH:MM в формат YYYY-MM-DD HH:MM:SS"""
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y", "%d/%m/%y", "%d-%m-%y"):
         try:
-            dt_obj = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %H:%M")
+            dt = datetime.strptime(f"{date} {time_}", f"{fmt} %H:%M")
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
-            logging.warning(f"Не удалось распознать формат даты-времени: {date_str} {time_str}. Пропускаем.")
-            return ""
+            continue
+    logging.warning("Не удалось распарсить дату-время %s %s", date, time_)
+    return None
 
-    # Форматируем в строку, которую понимает Pocketbase
-    return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
 
-def sync_cache_to_pocketbase(cache_dir: str):
-    """
-    Синхронизирует обработанные данные из кэша в Pocketbase.
-    """
-    logging.info("--- Начало синхронизации с Pocketbase ---")
+def _build_sms_data(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Подготовка payload для коллекции sms_data."""
+    pb_dt = _dt_str(record.get("date", ""), record.get("time", ""))
+    if not pb_dt:
+        return None
+    return {
+        "merchant":      record.get("merchant"),
+        "city":          record.get("city"),
+        "address":       record.get("address"),
+        "datetime":      pb_dt,
+        "card":          record.get("card"),
+        "amount":        str(record.get("amount", 0.0)),
+        "currency":      record.get("currency"),
+        "balance":       str(record.get("balance", 0.0)),
+        "original_key":  record.get("original_key"),
+        "original_body": record.get("original_body"),
+    }
 
-    try:
-        # 1. Подключение к Pocketbase
-        client = PocketBase(POCKETBASE_URL)
-        # Аутентификация администратора для получения прав на запись
-        #client.admins.auth_with_password(POCKETBASE_EMAIL, POCKETBASE_PASSWORD)
-        logging.info(f"Успешная аутентификация в Pocketbase на {POCKETBASE_URL}")
-    except Exception as e:
-        logging.error(f"Не удалось подключиться к Pocketbase: {e}")
-        return
 
-    synced_count = 0
-    skipped_count = 0
-    error_count = 0
+def _build_transactions(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Payload для коллекции transactions (схема предоставлена пользователем)."""
+    pb_dt = _dt_str(record.get("date", ""), record.get("time", ""))
+    if not pb_dt:
+        return None
+    return {
+        "transaction_id":   record.get("original_key"),
+        "transaction_type": record.get("type", record.get("direction")),
+        "amount":           record.get("amount"),
+        "currency":         record.get("currency"),
+        "balance_after":    record.get("balance"),
+        "timestamp":        pb_dt,
+        "status":           "parsed",
+    }
 
-    # 2. Открытие кэша для чтения и записи
+SYNC_MAP = {
+    PURCHASE_CACHE_DIR: {
+        "collection": "sms_data",
+        "builder":    _build_sms_data,
+    },
+    CREDIT_CACHE_DIR: {
+        "collection": "transactions",
+        "builder":    _build_transactions,
+    },
+}
+
+# -----------------------------------------------------------------------------
+
+def _login(client: PocketBase):
+    """Login as admin (if credentials provided)."""
+    if PB_EMAIL and PB_PASSWORD:
+        try:
+            client.admins.auth_with_password(PB_EMAIL, PB_PASSWORD)
+            logging.info("Успешная аутентификация администратора PB.")
+        except Exception as e:
+            logging.warning("Не удалось войти админом: %s. Продолжаем без авторизации.", e)
+
+
+def sync_cache(cache_dir: str, config: Dict[str, Any], client: PocketBase):
+    """Синхронизирует один кэш с одной коллекцией."""
+    collection = client.collection(config["collection"])
+    build      = config["builder"]
+
+    synced = skipped = errors = 0
+
     with Cache(cache_dir) as cache:
-        keys_to_process = list(cache)
-        logging.info(f"Найдено {len(keys_to_process)} записей в локальном кэше.")
-
-        for key in keys_to_process:
-            record = cache.get(key)
-
-            # 3. Пропускаем уже синхронизированные записи
-            if record.get('status') == 'synced':
-                skipped_count += 1
+        keys = list(cache)
+        logging.info("Кэш %s: найдено %d записей.", cache_dir, len(keys))
+        for key in keys:
+            rec = cache.get(key)
+            # пропуск уже синхронизированных
+            if rec.get("status") == "synced":
+                skipped += 1
                 continue
 
-            # Уникальный идентификатор для проверки на дубликаты
-            original_key = record.get('original_key')
+            original_key = rec.get("original_key")
             if not original_key:
-                logging.warning(f"У записи с ключом {key} отсутствует original_key. Пропускаем.")
-                error_count += 1
+                logging.warning("Отсутствует original_key для %s", key)
+                errors += 1
                 continue
 
+            # Дедупликация в PB
             try:
-                # 4. Проверка на существование записи в Pocketbase
-                existing_records = client.collection(POCKETBASE_COLLECTION).get_list(
-                    query_params={"filter": f'original_key="{original_key}"'}
-                )
-                if existing_records.total_items > 0:
-                    logging.info(f"Запись с original_key={original_key} уже существует. Помечаем как синхронизированную.")
-                    record['status'] = 'synced'
-                    cache.set(key, record)
-                    skipped_count += 1
+                dup = collection.get_list(query_params={"filter": f'original_key="{original_key}"'}) if "sms_data" == config["collection"] else collection.get_list(query_params={"filter": f'transaction_id="{original_key}"'})
+                if dup.total_items:
+                    rec["status"] = "synced"
+                    cache.set(key, rec)
+                    skipped += 1
                     continue
-
-                # 5. Подготовка данных для Pocketbase
-                pb_datetime = format_datetime_for_pb(record.get('date', ''), record.get('time', ''))
-                if not pb_datetime:
-                    error_count += 1
-                    continue
-
-                payload = {
-                    "merchant": record.get("merchant"),
-                    "city": record.get("city"),
-                    "address": record.get("address"),
-                    "datetime": pb_datetime,
-                    "card": record.get("card"),
-                    # Поля amount и balance в вашей схеме - текстовые
-                    "amount": str(record.get("amount", 0.0)),
-                    "currency": record.get("currency"),
-                    "balance": str(record.get("balance", 0.0)),
-                    "original_key": original_key,
-                    "original_body": record.get("original_body")
-                }
-
-                # 6. Создание новой записи
-                client.collection(POCKETBASE_COLLECTION).create(payload)
-                logging.info(f"Успешно создана запись для original_key={original_key}")
-
-                # 7. Обновление статуса в кэше
-                record['status'] = 'synced'
-                cache.set(key, record)
-                synced_count += 1
-
             except Exception as e:
-                logging.error(f"Непредвиденная ошибка при обработке original_key={original_key}: {e}")
-                error_count += 1
+                logging.error("Ошибка запроса к PocketBase: %s", e)
+                errors += 1
+                continue
 
-    logging.info("--- Синхронизация завершена ---")
-    logging.info(f"Новых записей синхронизировано: {synced_count}")
-    logging.info(f"Пропущено (уже существуют или обработаны): {skipped_count}")
-    logging.info(f"Записей с ошибками: {error_count}")
+            payload = build(rec)
+            if not payload:
+                errors += 1
+                continue
 
+            # Сохраняем
+            try:
+                collection.create(payload)
+                rec["status"] = "synced"
+                cache.set(key, rec)
+                synced += 1
+            except Exception as e:
+                logging.error("Ошибка создания записи в PB: %s", e)
+                errors += 1
 
-if __name__ == '__main__':
-    sync_cache_to_pocketbase(PROCESSED_CACHE_DIR)
+    logging.info("%s => %s | синхр: %d, пропущено: %d, ошибки: %d", cache_dir, config["collection"], synced, skipped, errors)
+
+# -----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    client = PocketBase(PB_URL)
+    _login(client)
+
+    for cdir, cfg in SYNC_MAP.items():
+        sync_cache(cdir, cfg, client)

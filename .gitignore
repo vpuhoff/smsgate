@@ -13,3 +13,4 @@ parsed_sms_cache/
 sms_cache/
 *.xml
 .env
+credit_sms_cache/
