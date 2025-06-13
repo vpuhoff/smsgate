@@ -1,0 +1,15 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.hookdeck_cache/
+parsed_sms_cache/
+sms_cache/
+*.xml
+.env
