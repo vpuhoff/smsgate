@@ -24,7 +24,6 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # ── Redis ────────────────────────────────────────────────────────────────
-    redis_dsn: str = Field("redis://localhost:6379/0", env="REDIS_DSN")
     nats_dsn: str = Field("redis://localhost:6379/0", env="NATS_DSN")
 
     # ── PocketBase ───────────────────────────────────────────────────────────
