@@ -6,6 +6,9 @@ SMSGate is an asynchronous, scalable pipeline designed to receive, parse, and st
 
 The system operates on an event-driven model where SMS messages flow through a series of specialized, independent services. This design ensures robustness, scalability, and maintainability.
 
+* Wiki: [https://deepwiki.com/vpuhoff/smsgate](https://deepwiki.com/vpuhoff/smsgate)
+
+
 **Data Flow:**
 
 1.  **Ingestion**: The `API Gateway` receives raw SMS data via a POST request. Alternatively, the `XML Watcher` can ingest messages from XML backup files dropped into a designated folder.
