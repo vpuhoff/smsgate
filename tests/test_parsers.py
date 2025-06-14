@@ -12,29 +12,29 @@ from libs.models import RawSMS, TxnType
 CASES = [
     # ─ 1. С адресом ────────────────────────────────────────────────
     (
-        "APPROVED PURCHASE DB SALE: KHOJAYAN LLC, YEREVAN, "
-        "GYULBENKYAN STR. 29, 24 AREA,06.05.25 14:23,card ***0018. "
-        "Amount:5200.00 AMD, Balance:184260.74 AMD",
+        "APPROVED PURCHASE DB SALE: TEST LLC, MOSKOW, "
+        "TEST STR. 29, 24 AREA,06.05.25 14:23,card ***0018. "
+        "Amount:52.00 USD, Balance:1842.74 USD",
         dict(
-            merchant="KHOJAYAN LLC",
-            city="YEREVAN",
-            address="GYULBENKYAN STR. 29, 24 AREA",
-            amount=Decimal("5200.00"),
-            balance=Decimal("184260.74"),
+            merchant="TEST LLC",
+            city="MOSKOW",
+            address="TEST STR. 29, 24 AREA",
+            amount=Decimal("52.00"),
+            balance=Decimal("1842.74"),
             date=datetime(2025, 5, 6, 14, 23),
         ),
     ),
     # ─ 2. Без адреса ───────────────────────────────────────────────
     (
-        "APPROVED PURCHASE DB SALE: BAREV, YEREVAN,"
-        "06.05.25 15:11,card ***0018. Amount:3460.00 AMD, "
-        "Balance:180800.74 AMD",
+        "APPROVED PURCHASE DB SALE: TEST, MOSKOW,"
+        "06.05.25 15:11,card ***0018. Amount:3460.00 USD, "
+        "Balance:1800.74 USD",
         dict(
-            merchant="BAREV",
-            city="YEREVAN",
-            address="null",
+            merchant="TEST",
+            city="MOSKOW",
+            address="",
             amount=Decimal("3460.00"),
-            balance=Decimal("180800.74"),
+            balance=Decimal("1800.74"),
             date=datetime(2025, 5, 6, 15, 11),
         ),
     ),
@@ -67,7 +67,7 @@ def test_parse_purchase_sale(sms_body: str, expected: dict):
     assert result.address == expected["address"]
     assert result.card == "0018"
     assert result.amount == expected["amount"]
-    assert result.currency == "AMD"
+    assert result.currency == "USD"
     assert result.balance == expected["balance"]
     assert result.date == expected["date"]
 
