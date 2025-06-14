@@ -4,7 +4,24 @@
     // Для получения дополнительной информации посетите: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
+        {
+            "name": "api_gateway",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.api_gateway.main"
+        },
+        {
+            "name": "xml_watcher",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.xml_watcher.watcher"
+        },
+        {
+            "name": "parser_worker",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.parser_worker.worker"
+        },
         {
             "name": "Receiver",
             "type": "debugpy",

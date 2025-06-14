@@ -1,0 +1,102 @@
+# -----------------------------------------------------------------------------
+# Local development stack for the SMS-pipeline
+# -----------------------------------------------------------------------------
+# Services:
+#   • redis         – Stream backbone
+#   • pocketbase    – Lightweight backend DB (Admin UI on :8090)
+#   • api_gateway   – Public FastAPI endpoint (HTTP :8000, metrics :9101)
+#   • parser_worker – Consumes sms_raw → sms_parsed (metrics :9102)
+#   • pb_writer     – Persists sms_parsed → PocketBase (metrics :9103)
+#   • xml_watcher   – Fallback ingester for XML dumps (watches ./backups)
+# -----------------------------------------------------------------------------
+
+services:
+
+  nats:
+    image: nats:latest
+    # Запускаем NATS сервер с включенной поддержкой JetStream.
+    # Это важно для работы вашего Python-кода, который использует персистентность.
+    command: 
+      - "-js"
+      - "-sd=/data"
+    ports:
+      # Основной порт для подключения клиентов (включая ваш Python-код)
+      - "4222:4222"
+    restart: unless-stopped
+    volumes:
+      - ./.nats-data:/data
+
+  nats-nui:
+    image: ghcr.io/nats-nui/nui
+    ports:
+      - "31311:31311"
+    volumes:
+      - "./.nats-db:/db"
+      - "./.nats-creds:/nats-creds:ro"
+    restart: unless-stopped
+    # Указываем, что NUI зависит от сервера NATS.
+    # Это гарантирует, что NATS сервер запустится первым.
+    depends_on:
+      - nats
+
+
+  # pocketbase:
+  #   image: ghcr.io/pocketbase/pocketbase:v0.24.6
+  #   ports:
+  #     - "8090:8090"
+  #   volumes:
+  #     - pb_data:/pb_data
+  #   environment:
+  #     - PB_LOG_LEVEL=debug
+  #     - PB_DATA_DIR=/pb_data
+
+  api_gateway:
+    build: 
+      context: .
+      dockerfile: services/api_gateway/Dockerfile
+    ports:
+      - "9001:9001"
+      - "9101:9101"
+    env_file: .env
+    depends_on:
+      - nats
+
+  # parser_worker:
+  #   build: ./services/parser_worker
+  #   env_file: .env
+  #   depends_on:
+  #     - redis
+  #   ports:
+  #     - "9102:9102"   # metrics
+  #   volumes:
+  #     - ./libs:/app/libs:ro
+  #     - ./services/parser_worker:/app/services/parser_worker:ro
+
+  # pb_writer:
+  #   build: ./services/pb_writer
+  #   env_file: .env
+  #   depends_on:
+  #     - redis
+  #     - pocketbase
+  #   ports:
+  #     - "9103:9103"   # metrics
+  #   volumes:
+  #     - ./libs:/app/libs:ro
+  #     - ./services/pb_writer:/app/services/pb_writer:ro
+
+  xml_watcher:
+    build: 
+      context: .
+      dockerfile: services/xml_watcher/Dockerfile
+    env_file: .env
+    environment:
+      - BACKUP_DIR=/backups
+    depends_on:
+      - nats
+    volumes:
+      - ./backups:/backups
+
+
+volumes:
+  redis_data:
+  # pb_data:

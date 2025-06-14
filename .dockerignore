@@ -1,3 +1,15 @@
+.venv
+# Другие стандартные исключения
+__pycache__/
+*.pyc
+.git/
+.vscode/
+.idea/
+.DS_Store
+*.db
+*.bin
+*.xml
+.nats-data
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -8,8 +20,6 @@ wheels/
 
 # Virtual environments
 .venv
-
-# DiskCache directories
 .hookdeck_cache/
 parsed_sms_cache/
 sms_cache/
@@ -24,5 +34,3 @@ credit_sms_cache/
 .nats-data/
 .sfdx
 backups
-.coverage
-

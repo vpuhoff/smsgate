@@ -17,10 +17,10 @@ Usage
 
 The script will:
     * Fetch events from Hookdeck REST API (paginated)
-    * Cache every raw event body in a local on‑disk cache (./.hookdeck_cache)
-    * Parse SMS‑style transaction messages into structured dicts
+    * Cache every raw event body in a local on-disk cache (./.hookdeck_cache)
+    * Parse SMS-style transaction messages into structured dicts
     * Log and send any parsing/fetching errors to Sentry
-    * Skip already‑seen events by their `id`
+    * Skip already-seen events by their `id`
 """
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def fetch_events(limit: int = 100) -> List[dict]:
 
     The function keeps calling the API until no `next` pagination link is
     returned. Each event's JSON body is stored under its `id` key in the
-    local diskcache so re‑runs do not duplicate work.
+    local diskcache so re-runs do not duplicate work.
     """
     if not (API_KEY and WEBHOOK_ID):
         raise RuntimeError("Missing HOOKDECK_API_KEY or HOOKDECK_WEBHOOK_ID env vars")
@@ -160,7 +160,7 @@ def fetch_events(limit: int = 100) -> List[dict]:
         next_url = payload.get("next") or payload.get("links", {}).get("next")
         if next_url:
             BASE_URL_PAGE = next_url  # Hookdeck already includes query params
-            params = None  # avoid double‑param mixture
+            params = None  # avoid double-param mixture
             logger.info("Fetching next page: %s", next_url)
             BASE_URL = next_url  # noqa: PLW0127 – reassigned for next loop
         else:
@@ -189,6 +189,6 @@ if __name__ == "__main__":
         print(json.dumps(parsed, ensure_ascii=False, indent=2))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception as exc:  # capture any top‑level crash
+    except Exception as exc:  # capture any top-level crash
         logger.exception("Unexpected failure")
         capture_exception(exc)

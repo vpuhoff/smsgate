@@ -12,8 +12,8 @@
 Supported debit prefixes so far:
     • "PURCHASE: …"
     • "SALE: …"
-    • "PURCHASE DB INTERNET: …"         (online, e‑commerce)
-    • "PURCH.COMPLETION.DB INTERNET: …" (post‑auth completion)
+    • "PURCHASE DB INTERNET: …"         (online, e-commerce)
+    • "PURCH.COMPLETION.DB INTERNET: …" (post-auth completion)
 
 If you spot a new prefix, just add it to *TRANSACTION_RE*’s alternation list.
 
@@ -60,7 +60,7 @@ def _init_sentry() -> None:  # noqa: D401 – short description fine
         return
 
     def _store_event_locally(event: dict, _hint: dict | None) -> None:
-        """Persist event to *SENTRY_CACHE_DIR* (fire‑and‑forget)."""
+        """Persist event to *SENTRY_CACHE_DIR* (fire-and-forget)."""
         try:
             with Cache(SENTRY_CACHE_DIR) as cache:
                 cache.set(event.get("event_id"), event)
@@ -93,8 +93,8 @@ TRANSACTION_RE = re.compile(
     r"""
     ^.*?                              # префикс (APPROVED, REVERSE, etc.)
     (?:                               # допустимые ключевые слова
-        PURCHASE\s+DB\s+INTERNET   | # e‑commerce auth
-        PURCH\.COMPLETION\.DB\s+INTERNET | # e‑commerce completion
+        PURCHASE\s+DB\s+INTERNET   | # e-commerce auth
+        PURCH\.COMPLETION\.DB\s+INTERNET | # e-commerce completion
         PURCHASE                      | # классическая покупка
         SALE                            # списание
     ):\s*
@@ -206,7 +206,7 @@ def process_sms_from_cache(
     purchase_dest_dir: str = PURCHASE_CACHE_DIR,
     credit_dest_dir: str = CREDIT_CACHE_DIR,
 ) -> None:
-    """Process raw SMS messages from *source_dir* and fan‑out to two result caches."""
+    """Process raw SMS messages from *source_dir* and fan-out to two result caches."""
 
     with Cache(source_dir) as source_cache, Cache(purchase_dest_dir) as purchase_cache, Cache(credit_dest_dir) as credit_cache:
         logger.info("Начало обработки сообщений из кэша: %s", source_dir)
@@ -226,7 +226,7 @@ def process_sms_from_cache(
 
             body_text = (message_data.get("body") or "").strip()
 
-            # -- Skip OTP/non‑transactional alerts ----------------------------------
+            # -- Skip OTP/non-transactional alerts ----------------------------------
             if "OTP" in body_text.upper() or "PASS=" in body_text.upper() or "CODE:" in body_text.upper():
                 message_data["status"] = "skipped_otp"
                 source_cache.set(key, message_data)
