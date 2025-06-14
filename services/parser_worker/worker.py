@@ -64,7 +64,7 @@ async def _process_one(
         await msg.ack()
         return
 
-    if 'OTP' in raw_sms.body or 'CODE:' in raw_sms.body:
+    if 'OTP' in raw_sms.body.upper() or 'CODE:' in raw_sms.body.upper() or 'NOT ENOUGH FUNDS' in raw_sms.body.upper():
         PARSED_OK.inc()
         await msg.ack()
         return 

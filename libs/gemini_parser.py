@@ -33,6 +33,7 @@ SYSTEM_INSTRUCTION = (
     f"со строго следующими ключами: {', '.join(ParsedSmsCore.model_fields)}. "
     "Без Markdown-обёрток и лишнего текста."
     "txn_type может иметь значения 'debit', 'credit', 'otp' или 'unknown'"
+    "Дата в сообщении обычно в формате день.месяц.год часы:минуты"
 )
 
 # Ручная схема Gemini (чисто строковые типы; кортежи/enum проверит Pydantic)

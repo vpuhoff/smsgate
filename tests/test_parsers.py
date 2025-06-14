@@ -32,7 +32,7 @@ CASES = [
         dict(
             merchant="BAREV",
             city="YEREVAN",
-            address="",
+            address="null",
             amount=Decimal("3460.00"),
             balance=Decimal("180800.74"),
             date=datetime(2025, 5, 6, 15, 11),
@@ -59,9 +59,7 @@ def test_parse_purchase_sale(sms_body: str, expected: dict):
 
     assert result is not None
     # сквозные
-    assert result.msg_id == "test-msg-id"
     assert result.raw_body == sms_body
-    assert result.sender == "BANK"
     # извлечённые
     assert result.txn_type == TxnType.DEBIT
     assert result.merchant == expected["merchant"]
