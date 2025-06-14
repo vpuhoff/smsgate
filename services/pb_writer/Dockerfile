@@ -1,3 +1,4 @@
+
 FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -19,10 +20,12 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir ngrok
 
 COPY libs /app/libs
-COPY services/xml_watcher/*.py /app
+COPY services/pb_writer/*.py /app
 
 WORKDIR /app
 
+# --- default ports -------------------------------------------------------------
+EXPOSE $PARSER_METRICS_PORT
 
 # --- entrypoint ---------------------------------------------------------------
-CMD ["python3", "watcher.py"]
+CMD ["python3", "writer.py"]

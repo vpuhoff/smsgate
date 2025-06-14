@@ -25,6 +25,7 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 # 2. Общие инструменты
 # ────────────────────────────────
 cache = diskcache.Cache(".gemini_cache")
+print(f"Хэш gemini загружен: {len(cache)}")
 _JSON_RE = re.compile(r"\{.*\}", re.S)           # «первый» JSON в тексте
 
 SYSTEM_INSTRUCTION = (
@@ -94,6 +95,9 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
         system_instruction=[types.Part.from_text(text=SYSTEM_INSTRUCTION)],
     )
 
+    if 'OTP' in raw.body or 'CODE:' in raw.body:
+        return None
+
     try:
         stream = client.models.generate_content_stream(
             model=GEMINI_MODEL,
@@ -125,7 +129,8 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
         resp_data['balance'] = parse_ambiguous_decimal(str(resp_data['balance']))
         core = ParsedSmsCore.model_validate(resp_data)
     except Exception as exc:
-        sentry_capture(exc)      # схему нарушили
+        if resp_data['txn_type'] != 'otp':
+            sentry_capture(exc)      # схему нарушили
         return None
 
     parsed = ParsedSMS(

@@ -27,18 +27,7 @@ from libs.models import RawSMS
 from libs.nats_utils import publish_raw_sms, get_nats_connection
 from libs.sentry import init_sentry, sentry_capture
 
-root_logger = logging.getLogger()          # ← root, без имени
-if not root_logger.hasHandlers():          # не клепаем дубли
-    root_logger.setLevel(logging.INFO)
-    serial_handler = logging.StreamHandler(sys.stdout)
-    serial_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
-    root_logger.addHandler(serial_handler)
-
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("xml_watcher")
 log.setLevel(logging.INFO)
 

@@ -1,23 +1,10 @@
 # services/parser_worker/worker.py
-"""Parser Worker
-================
 
-* Читает необработанные сообщения из NATS-субъекта `sms.raw`.
-* Пытается распарсить их регулярками из `libs.regexes` и конвертировать в
-  `ParsedSMS`.
-* Успешные результаты кладёт в NATS-субъект `sms.parsed`, неудачные – в `sms.failed`.
-* Обновляет Prometheus‑метрики и отправляет ошибки в Sentry.
-
-Запуск
-------
-```bash
-poetry run python -m services.parser_worker.worker --group parsers --name $(hostname)-$$
-```
-"""
 from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -38,11 +25,10 @@ from libs.nats_utils import (
     SUBJECT_PARSED,
     SUBJECT_FAILED,
 )
-from libs.regexes import parse_sms  # функция, возвращающая ParsedSMS | None
 from libs.gemini_parser import parse_sms_llm
 from libs.sentry import init_sentry, sentry_capture
 
-from .metrics import (
+from metrics import (
     PARSED_FAIL,
     PARSED_OK,
     PROCESSING_TIME,
@@ -78,6 +64,11 @@ async def _process_one(
         await msg.ack()
         return
 
+    if 'OTP' in raw_sms.body or 'CODE:' in raw_sms.body:
+        PARSED_OK.inc()
+        await msg.ack()
+        return 
+    
     # Основная логика парсинга
     with PROCESSING_TIME.time():
         try:
@@ -110,9 +101,11 @@ async def _process_one(
         await msg.ack()
         return
     success_payload = parsed_sms.model_dump_json().encode()
+    if not isinstance(parsed_sms.date, datetime):
+        logger.warning("Не считалась дата: %s", raw_sms.body[:60])
     await js.publish(SUBJECT_PARSED, success_payload)
     PARSED_OK.inc()
-    logger.debug("Успешно обработано: %s", raw_sms.body[:60])
+    logger.info("Успешно обработано: %s", raw_sms.body[:60])
     await msg.ack()
 
 

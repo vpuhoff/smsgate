@@ -61,28 +61,28 @@ services:
     depends_on:
       - nats
 
-  # parser_worker:
-  #   build: ./services/parser_worker
-  #   env_file: .env
-  #   depends_on:
-  #     - redis
-  #   ports:
-  #     - "9102:9102"   # metrics
-  #   volumes:
-  #     - ./libs:/app/libs:ro
-  #     - ./services/parser_worker:/app/services/parser_worker:ro
+  parser_worker:
+    build: 
+      context: .
+      dockerfile: services/parser_worker/Dockerfile
+    env_file: .env
+    depends_on:
+      - nats
+    ports:
+      - "9102:9102" 
+    volumes:
+      - ./.gemini_cache:/app/.gemini_cache
 
-  # pb_writer:
-  #   build: ./services/pb_writer
-  #   env_file: .env
-  #   depends_on:
-  #     - redis
-  #     - pocketbase
-  #   ports:
-  #     - "9103:9103"   # metrics
-  #   volumes:
-  #     - ./libs:/app/libs:ro
-  #     - ./services/pb_writer:/app/services/pb_writer:ro
+  pb_writer:
+    build: 
+      context: .
+      dockerfile: services/pb_writer/Dockerfile
+    env_file: .env
+    depends_on:
+      - nats
+      # - pocketbase
+    ports:
+      - "9103:9103"   # metrics
 
   xml_watcher:
     build: 

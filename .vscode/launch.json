@@ -20,7 +20,19 @@
             "name": "parser_worker",
             "type": "debugpy",
             "request": "launch",
-            "module": "services.parser_worker.worker"
+            "module": "services.parser_worker.worker",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/services/parser_worker:${env:PYTHONPATH}"
+            }
+        },
+        {
+            "name": "pb_writer",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.pb_writer.writer",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/services/pb_writer:${env:PYTHONPATH}"
+            }
         },
         {
             "name": "Receiver",
