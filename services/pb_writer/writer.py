@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -66,6 +67,8 @@ async def _process_one(js, msg) -> None:
         parsed = ParsedSMS.model_validate(data)
         if parsed.merchant:
             log.info(f'Save event to pocketbase: {parsed.raw_body}')
+            if parsed.date > datetime.now():
+                raise Exception("Bad date")
             await _safe_upsert(parsed)
         await msg.ack()
     except Exception as e:  # noqa: BLE001

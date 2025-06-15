@@ -64,7 +64,10 @@ async def _process_one(
         await msg.ack()
         return
 
-    if 'OTP' in raw_sms.body.upper() or 'CODE:' in raw_sms.body.upper() or 'NOT ENOUGH FUNDS' in raw_sms.body.upper():
+    if 'OTP' in raw_sms.body.upper() or \
+            'CODE:' in raw_sms.body.upper() or \
+            'NOT ENOUGH FUNDS' in raw_sms.body.upper() or \
+            'INSUFFICIENT FUNDS' in raw_sms.body.upper():
         PARSED_OK.inc()
         await msg.ack()
         return 
@@ -100,13 +103,27 @@ async def _process_one(
         PARSED_FAIL.inc()
         await msg.ack()
         return
-    success_payload = parsed_sms.model_dump_json().encode()
     if not isinstance(parsed_sms.date, datetime):
         logger.warning("Не считалась дата: %s", raw_sms.body[:60])
+    else:
+        # Перепроверяем дату
+        fix_broken_datetime(parsed_sms)
+
+    success_payload = parsed_sms.model_dump_json().encode()
+
     await js.publish(SUBJECT_PARSED, success_payload)
     PARSED_OK.inc()
     logger.info("Успешно обработано: %s", raw_sms.body[:60])
     await msg.ack()
+
+def fix_broken_datetime(parsed_sms):
+    if parsed_sms.date.month != parsed_sms.date.day:
+        formatted_date = parsed_sms.date.strftime("%m.%d.%y")
+        if formatted_date in parsed_sms.raw_body:
+            parsed_sms.date = parsed_sms.date.replace(month=parsed_sms.date.day, day=parsed_sms.date.month)
+        formatted_date = parsed_sms.date.strftime("%m.%d.%Y")
+        if formatted_date in parsed_sms.raw_body:
+            parsed_sms.date = parsed_sms.date.replace(month=parsed_sms.date.day, day=parsed_sms.date.month)
 
 
 # ---------------------------------------------------------------------------

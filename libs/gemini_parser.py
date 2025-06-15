@@ -123,6 +123,12 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
         return None
     try:
         resp_data['date'] = parse_custom_datetime(resp_data['date'])
+        if resp_data['date'] > datetime.now():
+            formatted_date = resp_data['date'].strftime("%d.%m.%Y")
+            formatted_date2 = resp_data['date'].strftime("%d.%m.%y")
+            if formatted_date not in raw.body and formatted_date2 not in raw.body:
+                raise Exception("failed date parsing")
+
         resp_data['card'] = resp_data['card'].replace("*", '')
         if len(resp_data['card']) > 4:
             resp_data['card'] = resp_data['card'][:4]
