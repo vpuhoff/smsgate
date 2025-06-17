@@ -67,7 +67,10 @@ async def _process_one(
     if 'OTP' in raw_sms.body.upper() or \
             'CODE:' in raw_sms.body.upper() or \
             'NOT ENOUGH FUNDS' in raw_sms.body.upper() or \
-            'INSUFFICIENT FUNDS' in raw_sms.body.upper():
+            'INSUFFICIENT FUNDS' in raw_sms.body.upper() or \
+            'CREDIT PAYMENT' in raw_sms.body.upper() or \
+            'C2C RECEIVED' in raw_sms.body.upper() or \
+            'PERSON TO PERSON' in raw_sms.body.upper():
         PARSED_OK.inc()
         await msg.ack()
         return 

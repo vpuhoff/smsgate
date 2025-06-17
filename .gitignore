@@ -26,3 +26,5 @@ credit_sms_cache/
 backups
 .coverage
 
+payments_by_day.html
+payments_by_day.png

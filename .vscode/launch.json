@@ -35,6 +35,15 @@
             }
         },
         {
+            "name": "dashboard",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.dashboard.main",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/services/dashboard:${env:PYTHONPATH}"
+            }
+        },
+        {
             "name": "Receiver",
             "type": "debugpy",
             "request": "launch",
