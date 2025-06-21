@@ -276,26 +276,7 @@ async def run_pb_cycle(pb: PocketBaseClient) -> None:
         logger.info("PB cycle: новых записей нет")
         return
 
-    # 4. Строим график
-    try:
-        html_path, png_path, last_balance = build_chart(
-            records, title="Статистика платежей по дням"
-        )
-    except ValueError as e:
-        logger.error(f"PB cycle: ошибка построения графика: {e}")
-        return
-
-    # 5. Формируем подпись к изображению
-    caption = "Обновлённая статистика платежей"
-    if last_balance:
-        value, currency = last_balance
-        caption += f"\nПоследний баланс: {value:,.2f} {currency}".replace(",", " ")
-
-    # 6. Шлём файлы в Telegram
-    await tg_send_photo(png_path, caption=caption)
-    await tg_send_document(html_path)
-
-    # 7. Обновляем last_ts и сохраняем состояние
+    # 4. Проверяем last_ts
     valid_dts = [
         pd.to_datetime(r.get("datetime"), utc=True, errors="coerce") for r in records
     ]
@@ -303,9 +284,32 @@ async def run_pb_cycle(pb: PocketBaseClient) -> None:
 
     if valid_dts:
         latest_dt = max(valid_dts)
-        STATE["last_ts"] = latest_dt.isoformat()
-        save_state(STATE)
-        logger.info("PB cycle: STATE['last_ts'] обновлен → %s", STATE["last_ts"])
+
+        if latest_dt > last_ts:
+            # 5. Строим график
+            try:
+                html_path, png_path, last_balance = build_chart(
+                    records, title="Статистика платежей по дням"
+                )
+            except ValueError as e:
+                logger.error(f"PB cycle: ошибка построения графика: {e}")
+                return
+
+            # 6. Формируем подпись к изображению
+            caption = "Обновлённая статистика платежей"
+            if last_balance:
+                value, currency = last_balance
+                caption += f"\nПоследний баланс: {value:,.2f} {currency}".replace(",", " ")
+
+            # 7. Шлём файлы в Telegram
+            await tg_send_photo(png_path, caption=caption)
+            await tg_send_document(html_path)
+        
+            STATE["last_ts"] = latest_dt.isoformat()
+            save_state(STATE)
+            logger.info("PB cycle: STATE['last_ts'] обновлен → %s", STATE["last_ts"])
+        else:
+            logger.info("Новых записей нет, последняя запись: %s", STATE["last_ts"])
     else:
         logger.warning(
             "PB cycle: в новых записях не найдено корректных дат. Состояние не обновлено."
@@ -377,9 +381,9 @@ if __name__ == "__main__":
 
     try:
         # Для проверки можно запустить один раз
-        asyncio.run(run_once())
+        # asyncio.run(run_once())
         # В рабочем режиме вы вернете ваш оригинальный main()
-        # asyncio.run(main()) 
+        asyncio.run(main()) 
     except KeyboardInterrupt:
         logger.info("Exiting on Ctrl-C")
     except Exception as e:
