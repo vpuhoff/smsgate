@@ -28,8 +28,8 @@ class Settings(BaseSettings):
 
     # ── PocketBase ───────────────────────────────────────────────────────────
     pb_url: str = Field("http://127.0.0.1:8090", env="PB_URL") # type: ignore
-    pb_email: Optional[str] = Field(None, env="PB_EMAIL") # type: ignore
-    pb_password: Optional[str] = Field(None, env="PB_PASSWORD") # type: ignore
+    pb_email: str = Field("", env="PB_EMAIL") # type: ignore
+    pb_password: str = Field("", env="PB_PASSWORD") # type: ignore
 
     # ── Sentry ───────────────────────────────────────────────────────────────
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN") # type: ignore

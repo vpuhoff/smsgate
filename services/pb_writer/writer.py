@@ -21,8 +21,8 @@ from libs.nats_utils import (
     SUBJECT_FAILED,
 )
 from libs.sentry import init_sentry, sentry_capture
+from libs.pocketbase import upsert_parsed_sms
 
-from pocketbase import upsert_parsed_sms
 
 settings = get_settings()
 # ──────────────────────────── logging ────────────────────────────────

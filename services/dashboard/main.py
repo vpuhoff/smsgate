@@ -45,6 +45,7 @@ import plotly.express as px
 from dateutil import parser as dt_parse
 
 from libs.config import get_settings
+from libs.pocketbase import AsyncPocketBaseClient, PocketBaseClient
 
 # ---------- Логирование ----------
 logging.basicConfig(
@@ -69,73 +70,6 @@ STATE_PATH = pathlib.Path("last_state.json")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "3600"))
 
 TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
-
-
-# ---------- PocketBase клиент ----------
-class PocketBaseClient:
-    def __init__(self, *, base_url: str, email: str, password: str) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._email = email
-        self._password = password
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=30.0)
-        self._token: str | None = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
-
-    async def _ensure_token(self) -> None:
-        if self._token:
-            return
-        logger.info("PB: аутентификация …")
-        resp = await self._client.post(
-            "/api/admins/auth-with-password",
-            json={"identity": self._email, "password": self._password},
-        )
-        resp.raise_for_status()
-        self._token = resp.json()["token"]
-        self._client.headers["Authorization"] = f"Bearer {self._token}"
-        logger.info("PB: OK")
-
-    async def get_records_since(self, collection: str, since_pb_str: str) -> List[Mapping[str, Any]]:
-        """
-        Получает записи из коллекции, у которых поле datetime > since_pb_str.
-        """
-        await self._ensure_token()
-        items: list[Mapping[str, Any]] = []
-        page = 1
-        per_page = 500
-        # Используем строку since_pb_str напрямую в фильтре
-        flt = f"datetime > '{since_pb_str}'"
-        logger.info(f"PB: Выполняется запрос с фильтром: {flt}")
-
-        while True:
-            params = {
-                "page": page,
-                "perPage": per_page,
-                "sort": "datetime", # Сортируем по дате, чтобы последние были в конце
-                "filter": flt,
-            }
-            resp = await self._client.get(
-                f"/api/collections/{collection}/records", params=params
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            batch = data.get("items", [])
-            if not batch:
-                break
-            items.extend(batch)
-            if data["page"] >= data["totalPages"]:
-                break
-            page += 1
-        logger.info(f"PB: получено {len(items)} новых записей.")
-        return items
-
-    async def close(self) -> None:
-        await self._client.aclose()
-
 
 # ---------- Telegram helpers ----------
 async def tg_request(method: str, **kwargs) -> httpx.Response:
@@ -353,7 +287,7 @@ async def listen_updates() -> None:
 async def main() -> None:
     logger.info("🚀 notifier started. Allowed chats: %s", ", ".join(map(str, ALLOWED_CHAT_IDS)))
 
-    async with PocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb:
+    async with AsyncPocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb:
         # Запускаем слушатель Telegram
         tg_task = asyncio.create_task(listen_updates())
 
@@ -376,7 +310,7 @@ if __name__ == "__main__":
     # Этот блок для демонстрации
     async def run_once():
         logger.info("🚀 Notifier started. Allowed chats: %s", ", ".join(map(str, ALLOWED_CHAT_IDS)))
-        async with PocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb:
+        async with AsyncPocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb: # type: ignore
             await run_pb_cycle(pb)
 
     try:

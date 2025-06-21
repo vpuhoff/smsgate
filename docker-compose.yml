@@ -93,6 +93,7 @@ services:
       context: .
       dockerfile: services/dashboard/Dockerfile
     env_file: .env
+    restart: unless-stopped
     volumes:
       - "./last_state.json:/app/last_state.json"
     depends_on:
