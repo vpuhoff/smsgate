@@ -44,6 +44,15 @@
             }
         },
         {
+            "name": "mcp_server",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.mcp_server.server",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/services/mcp_server:${env:PYTHONPATH}"
+            }
+        },
+        {
             "name": "Receiver",
             "type": "debugpy",
             "request": "launch",

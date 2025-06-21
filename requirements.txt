@@ -43,6 +43,7 @@ httptools==0.6.4
     # via uvicorn
 httpx==0.28.1
     # via
+    #   smsgate (pyproject.toml)
     #   google-genai
     #   pocketbase
 idna==3.10
@@ -54,10 +55,20 @@ iniconfig==2.1.0
     # via pytest
 msgpack==1.1.1
     # via smsgate (pyproject.toml)
+narwhals==1.43.0
+    # via plotly
 nats-py==2.10.0
     # via smsgate (pyproject.toml)
+numpy==2.3.0
+    # via pandas
 packaging==25.0
-    # via pytest
+    # via
+    #   plotly
+    #   pytest
+pandas==2.3.0
+    # via smsgate (pyproject.toml)
+plotly==6.1.2
+    # via smsgate (pyproject.toml)
 pluggy==1.6.0
     # via
     #   pytest
@@ -99,12 +110,16 @@ pytest-mock==3.14.1
 pytest-tornasync==0.6.0.post2
     # via smsgate (pyproject.toml)
 python-dateutil==2.9.0.post0
-    # via smsgate (pyproject.toml)
+    # via
+    #   smsgate (pyproject.toml)
+    #   pandas
 python-dotenv==1.1.0
     # via
     #   smsgate (pyproject.toml)
     #   pydantic-settings
     #   uvicorn
+pytz==2025.2
+    # via pandas
 pyyaml==6.0.2
     # via uvicorn
 redis==6.2.0
@@ -139,6 +154,8 @@ typing-inspection==0.4.1
     # via
     #   pydantic
     #   pydantic-settings
+tzdata==2025.2
+    # via pandas
 urllib3==2.4.0
     # via
     #   requests

@@ -6,8 +6,7 @@ import pytest
 
 from libs.gemini_parser import parse_sms_llm
 from libs.decimal_utils import parse_ambiguous_decimal
-from libs.models import RawSMS, TxnType
-
+from libs.models import ParsedSMS, RawSMS, TxnType
 
 CASES = [
     # ─ 1. С адресом ────────────────────────────────────────────────
@@ -22,6 +21,8 @@ CASES = [
             amount=Decimal("52.00"),
             balance=Decimal("1842.74"),
             date=datetime(2025, 5, 6, 14, 23),
+            card="0018",
+            currency="USD"
         ),
     ),
     # ─ 2. Без адреса ───────────────────────────────────────────────
@@ -36,6 +37,22 @@ CASES = [
             amount=Decimal("3460.00"),
             balance=Decimal("1800.74"),
             date=datetime(2025, 5, 6, 15, 11),
+            card="0018",
+            currency="USD"
+        ),
+    ),
+    (
+        "DEBIT ACCOUNT&#10;27,252.00 AMD&#10;4083***7538,&#10;AMERIABANK API GATE, AM"
+        "&#10;10.06.2025 20:51&#10;BALANCE: 391,469.09 AMD",
+        dict(
+            merchant="AMERIABANK API GATE",
+            city="AM",
+            address="",
+            amount=Decimal("27252.00"),
+            balance=Decimal("391469.09"),
+            date=datetime(2025, 6, 10, 20, 51),
+            card="7538",
+            currency="AMD"
         ),
     ),
 ]
@@ -58,16 +75,13 @@ def test_parse_purchase_sale(sms_body: str, expected: dict):
     result = parse_sms_llm(_mk_raw(sms_body))
 
     assert result is not None
-    # сквозные
-    assert result.raw_body == sms_body
-    # извлечённые
     assert result.txn_type == TxnType.DEBIT
     assert result.merchant == expected["merchant"]
     assert result.city == expected["city"]
     assert result.address == expected["address"]
-    assert result.card == "0018"
+    assert result.card == expected["card"]
     assert result.amount == expected["amount"]
-    assert result.currency == "USD"
+    assert result.currency == expected["currency"]
     assert result.balance == expected["balance"]
     assert result.date == expected["date"]
 

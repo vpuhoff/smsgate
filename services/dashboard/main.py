@@ -1,20 +1,78 @@
+#!/usr/bin/env python3
+"""PocketBase → Telegram hourly notifier + basic access control + last balance
+
+Что делает:
+1. Каждые `CHECK_INTERVAL_SECONDS` (по умолчанию — час) забирает *новые* записи из PocketBase
+   коллекции `sms_data`, строит bar-chart (HTML + PNG) **и присылает**
+   последнюю известную сумму *баланса карты*.
+2. **Параллельно** слушает входящие сообщения (`getUpdates`). Если бот получает
+   личное сообщение/упоминание из чата, чей `chat_id` **отсутствует** в списке
+   `TG_CHAT_IDS`, он отвечает текстом:
+   ``⛔️ У вас нет доступа к этому боту. Ваш chat_id: <id>``.
+
+Дополнительно: в caption к PNG добавляется строка вида
+```
+Последний баланс: 184 260.74 AMD
+```  (если поле `balance` удалось разобрать).
+
+Зависимости (pip install):
+    httpx pandas plotly kaleido python-dateutil
+
+Переменные окружения (или config.toml):
+    PB_URL, PB_EMAIL, PB_PASSWORD          – данные PocketBase
+    TG_BOT_TOKEN                           – токен Telegram-бота
+    TG_CHAT_IDS                            – допустимые chat_id через запятую
+    CHECK_INTERVAL_SECONDS                 – опционально, период (сек), default = 3600
+
+Файл состояния (`last_state.json`) хранит метку времени `last_ts`
+последней обработанной записи **и** `offset` Telegram-обновлений.
+"""
+from __future__ import annotations
+
 import asyncio
+import contextlib
+import json
+import logging
+import mimetypes
+import os
+import pathlib
+from datetime import datetime, timedelta, timezone
+from typing import Any, List, Mapping, Optional, Set, Tuple
+
 import httpx
 import pandas as pd
 import plotly.express as px
-import logging
-from typing import Any, Mapping, List
-from datetime import datetime, timedelta
+from dateutil import parser as dt_parse
+
 from libs.config import get_settings
 
-# --- Настройка логирования для отладки ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# ---------- Логирование ----------
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s — %(levelname)s — %(message)s"
+)
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-# --- Класс для работы с PocketBase ---
+# ---------- Константы / конфиг ----------
+settings = get_settings()
+PB_URL = settings.pb_url
+PB_EMAIL = settings.pb_email
+PB_PASSWORD = settings.pb_password
+TG_BOT_TOKEN: str = settings.tg_bot_token
+TG_CHAT_IDS_RAW: str = settings.tg_chat_ids
+
+ALLOWED_CHAT_IDS: Set[int] = {
+    int(cid.strip()) for cid in TG_CHAT_IDS_RAW.split(",") if cid.strip()
+}
+
+COLLECTION_NAME = "sms_data"
+STATE_PATH = pathlib.Path("last_state.json")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_SECONDS", "3600"))
+
+TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TG_BOT_TOKEN}"
+
+
+# ---------- PocketBase клиент ----------
 class PocketBaseClient:
-    """Асинхронный клиент для работы с API PocketBase."""
     def __init__(self, *, base_url: str, email: str, password: str) -> None:
         self._base_url = base_url.rstrip("/")
         self._email = email
@@ -22,126 +80,308 @@ class PocketBaseClient:
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=30.0)
         self._token: str | None = None
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+
     async def _ensure_token(self) -> None:
         if self._token:
             return
-        logger.info("Аутентификация в PocketBase...")
-        try:
-            resp = await self._client.post(
-                "/api/admins/auth-with-password",
-                json={"identity": self._email, "password": self._password},
+        logger.info("PB: аутентификация …")
+        resp = await self._client.post(
+            "/api/admins/auth-with-password",
+            json={"identity": self._email, "password": self._password},
+        )
+        resp.raise_for_status()
+        self._token = resp.json()["token"]
+        self._client.headers["Authorization"] = f"Bearer {self._token}"
+        logger.info("PB: OK")
+
+    async def get_records_since(self, collection: str, since_pb_str: str) -> List[Mapping[str, Any]]:
+        """
+        Получает записи из коллекции, у которых поле datetime > since_pb_str.
+        """
+        await self._ensure_token()
+        items: list[Mapping[str, Any]] = []
+        page = 1
+        per_page = 500
+        # Используем строку since_pb_str напрямую в фильтре
+        flt = f"datetime > '{since_pb_str}'"
+        logger.info(f"PB: Выполняется запрос с фильтром: {flt}")
+
+        while True:
+            params = {
+                "page": page,
+                "perPage": per_page,
+                "sort": "datetime", # Сортируем по дате, чтобы последние были в конце
+                "filter": flt,
+            }
+            resp = await self._client.get(
+                f"/api/collections/{collection}/records", params=params
             )
             resp.raise_for_status()
             data = resp.json()
-            self._token = data["token"]
-            self._client.headers["Authorization"] = f"Bearer {self._token}"
-            logger.info("Аутентификация прошла успешно.")
-        except httpx.RequestError as exc:
-            logger.error(f"Ошибка сети при аутентификации: {exc}. Убедитесь, что PocketBase запущен и доступен по адресу {self._base_url}")
-            raise
-        except httpx.HTTPStatusError as exc:
-            logger.error(f"Ошибка аутентификации: {exc.response.status_code} - {exc.response.text}. Проверьте email и пароль.")
-            raise
-
-    async def get_all_records(self, collection: str, filter_query: str | None = None) -> List[Mapping[str, Any]]:
-        """
-        Получает записи из коллекции, опционально применяя фильтр на стороне базы данных.
-        """
-        await self._ensure_token()
-        all_items = []
-        page = 1
-        per_page = 500
-        
-        # Подготовка параметров запроса
-        params = {"page": page, "perPage": per_page, "sort": "-created"}
-        if filter_query:
-            params["filter"] = filter_query
-            logger.info(f"Применяю фильтр: {filter_query}")
-
-        logger.info(f"Начинаю выгрузку данных из коллекции '{collection}'...")
-        while True:
-            # Устанавливаем текущую страницу для пагинации
-            params["page"] = page
-            
-            try:
-                resp = await self._client.get(f"/api/collections/{collection}/records", params=params)
-                resp.raise_for_status()
-                data = resp.json()
-                items = data.get("items", [])
-                if not items:
-                    break
-                all_items.extend(items)
-                logger.info(f"Загружено {len(items)} записей (всего: {len(all_items)}). Страница {data['page']}/{data['totalPages']}.")
-                if data['page'] >= data['totalPages']:
-                    break
-                page += 1
-            except httpx.HTTPStatusError as exc:
-                logger.error(f"Ошибка при получении данных из PocketBase: {exc.response.status_code} - {exc.response.text}")
-                raise
-                
-        logger.info(f"Выгрузка завершена. Всего получено {len(all_items)} записей.")
-        return all_items
-
+            batch = data.get("items", [])
+            if not batch:
+                break
+            items.extend(batch)
+            if data["page"] >= data["totalPages"]:
+                break
+            page += 1
+        logger.info(f"PB: получено {len(items)} новых записей.")
+        return items
 
     async def close(self) -> None:
         await self._client.aclose()
 
-def process_data_and_create_chart(records: List[Mapping[str, Any]], title: str):
-    """Обрабатывает записи и создает HTML-файл с графиком."""
+
+# ---------- Telegram helpers ----------
+async def tg_request(method: str, **kwargs) -> httpx.Response:
+    async with httpx.AsyncClient(
+        base_url=TELEGRAM_API_BASE, timeout=60.0
+    ) as client:
+        resp = await client.post(f"/{method}", **kwargs)
+        resp.raise_for_status()
+        return resp
+
+
+async def tg_send_document(path: pathlib.Path, caption: str | None = None) -> None:
+    for chat_id in ALLOWED_CHAT_IDS:
+        logger.info(f"Telegram: отправка документа {path.name} → {chat_id}")
+        with open(path, "rb") as f:
+            files = {"document": (path.name, f.read())}
+            data = {"chat_id": chat_id, "caption": caption or ""}
+            try:
+                await tg_request("sendDocument", data=data, files=files)
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    f"TG: ошибка отправки документа {exc.response.status_code}: {exc.response.text}"
+                )
+            else:
+                logger.info("Telegram: OK")
+
+
+async def tg_send_photo(path: pathlib.Path, caption: str | None = None) -> None:
+    mime_type, _ = mimetypes.guess_type(path)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    for chat_id in ALLOWED_CHAT_IDS:
+        logger.info(
+            f"Telegram: отправка фото {path.name} → {chat_id} (тип: {mime_type})"
+        )
+        with open(path, "rb") as f:
+            files = {"photo": (path.name, f.read(), mime_type)}
+            data = {"chat_id": chat_id, "caption": caption or ""}
+            try:
+                await tg_request("sendPhoto", data=data, files=files)
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    f"TG: ошибка отправки фото {exc.response.status_code}: {exc.response.text}"
+                )
+            else:
+                logger.info("Telegram: OK")
+
+
+# ---------- Состояние (last_ts и offset) ----------
+def load_state() -> dict[str, Any]:
+    if STATE_PATH.exists():
+        try:
+            return json.loads(STATE_PATH.read_text())
+        except Exception as e:
+            raise Exception(f"STATE: файл состояния поврежден, сброс ({e})")
+    # Значение по умолчанию
+    return {
+        "last_ts": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),
+        "offset": 0,
+    }
+
+
+def save_state(state: dict[str, Any]) -> None:
+    STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+STATE = load_state()
+
+
+# ---------- Обработка данных и график ----------
+def build_chart(
+    records: List[Mapping[str, Any]], title: str
+) -> Tuple[pathlib.Path, pathlib.Path, Optional[Tuple[float, str]]]:
+    df = pd.DataFrame(records)
+    if df.empty:
+        raise ValueError("DataFrame пуст, график не построить.")
+
+    df["merchant"] = (
+        df["merchant"].fillna("Unknown").replace({"": "Unknown", "null": "Unknown"})
+    )
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
+
+    if "balance" in df.columns:
+        df["balance"] = pd.to_numeric(df["balance"], errors="coerce")
+    else:
+        df["balance"] = pd.NA
+
+    df.dropna(subset=["amount", "datetime"], inplace=True)
+    df["date"] = df["datetime"].dt.date
+
+    daily = (
+        df.groupby(["date", "merchant"])["amount"]
+        .sum()
+        .reset_index()
+        .sort_values("date")
+    )
+
+    fig = px.bar(
+        daily,
+        x="date",
+        y="amount",
+        color="merchant",
+        labels={"date": "Дата", "amount": "Сумма", "merchant": "Продавец"},
+        height=600,
+    )
+    fig.update_layout(title_text=title, xaxis_tickangle=-45)
+
+    html_path = pathlib.Path("payments_by_day.html")
+    png_path = pathlib.Path("payments_by_day.jpg")
+    fig.write_html(html_path)
+    fig.write_image(png_path, format="jpg", scale=2)
+
+    last_balance: Optional[Tuple[float, str]] = None
+    if "balance" in df.columns and not df["balance"].isna().all():
+        latest_row = df.loc[df["datetime"].idxmax()]
+        bal_value = latest_row["balance"]
+        if pd.notna(bal_value):
+            currency = latest_row.get("currency", "") or ""
+            last_balance = float(bal_value), str(currency)
+
+    return html_path, png_path, last_balance
+
+
+# ---------- Основные циклы ----------
+async def run_pb_cycle(pb: PocketBaseClient) -> None:
+    # 1. От какой даты берём данные
+    STATE = load_state()
+    last_ts = dt_parse.isoparse(STATE["last_ts"])
+    
+    # 2. Формируем строку для фильтра в формате, который точно поймет PocketBase
+    since_pb_str = (last_ts + timedelta(microseconds=1) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S.%f')
+    
+    # 3. Тянем новые записи
+    records = await pb.get_records_since(COLLECTION_NAME, since_pb_str)
     if not records:
-        logger.warning("Список записей пуст. График не будет построен.")
+        logger.info("PB cycle: новых записей нет")
         return
 
-    df = pd.DataFrame(records)
-    logger.info("Данные успешно преобразованы в DataFrame.")
-    
-    # Обработка данных
-    df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-    df['datetime'] = pd.to_datetime(df.get('datetime'), errors='coerce')
-    df.dropna(subset=['amount', 'datetime'], inplace=True)
-    df['date'] = df['datetime'].dt.date
-    
-    # Агрегация данных
-    daily_sums = df.groupby(['date', 'merchant'])['amount'].sum().reset_index()
-    daily_sums = daily_sums.sort_values(by='date')
-    logger.info("Данные успешно агрегированы.")
-
-    # Создание графика
-    fig = px.bar(
-        daily_sums, x='date', y='amount', color='merchant',
-        title=title,
-        labels={'date': 'Дата', 'amount': 'Сумма платежей', 'merchant': 'Мерчант'},
-        height=600
-    )
-    fig.update_layout(xaxis_tickangle=-45)
-    
-    # Сохранение в HTML
-    output_filename = 'payments_by_day.html'
-    fig.write_html(output_filename)
-    fig.write_image('payments_by_day.png')
-    logger.info(f"График успешно сохранен в файл: {output_filename}")
-
-async def run_real_mode():
-    """Запускает скрипт для подключения к вашей базе PocketBase."""
-    logger.info("Запуск в реальном режиме...")
-    PB_URL = settings.pb_url  # Адрес вашего сервера PocketBase
-    PB_EMAIL = settings.pb_email      # Email администратора
-    PB_PASSWORD = settings.pb_password          # Пароль администратора
-    COLLECTION_NAME = "sms_data"
-    # --- Создаем строку с датой для фильтра ---
-    one_week_ago = datetime.now() - timedelta(days=7)
-    date_filter_string = one_week_ago.strftime('%Y-%m-%d %H:%M:%S')
-    pb_filter = f"datetime  >= '{date_filter_string}'"
-
-    client = PocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) # type: ignore
+    # 4. Строим график
     try:
-        records = await client.get_all_records(COLLECTION_NAME, filter_query=pb_filter)
-        process_data_and_create_chart(records, 'Сумма платежей по дням из PocketBase')
-    except Exception as e:
-        logger.error(f"Произошла ошибка при выполнении: {e}")
-    finally:
-        await client.close()
+        html_path, png_path, last_balance = build_chart(
+            records, title="Статистика платежей по дням"
+        )
+    except ValueError as e:
+        logger.error(f"PB cycle: ошибка построения графика: {e}")
+        return
 
+    # 5. Формируем подпись к изображению
+    caption = "Обновлённая статистика платежей"
+    if last_balance:
+        value, currency = last_balance
+        caption += f"\nПоследний баланс: {value:,.2f} {currency}".replace(",", " ")
+
+    # 6. Шлём файлы в Telegram
+    await tg_send_photo(png_path, caption=caption)
+    await tg_send_document(html_path)
+
+    # 7. Обновляем last_ts и сохраняем состояние
+    valid_dts = [
+        pd.to_datetime(r.get("datetime"), utc=True, errors="coerce") for r in records
+    ]
+    valid_dts = [dt for dt in valid_dts if pd.notna(dt)]
+
+    if valid_dts:
+        latest_dt = max(valid_dts)
+        STATE["last_ts"] = latest_dt.isoformat()
+        save_state(STATE)
+        logger.info("PB cycle: STATE['last_ts'] обновлен → %s", STATE["last_ts"])
+    else:
+        logger.warning(
+            "PB cycle: в новых записях не найдено корректных дат. Состояние не обновлено."
+        )
+
+
+async def listen_updates() -> None:
+    offset = STATE.get("offset", 0)
+    async with httpx.AsyncClient(base_url=TELEGRAM_API_BASE, timeout=60.0) as client:
+        while True:
+            params = {"timeout": 30}
+            if offset:
+                params["offset"] = offset
+            try:
+                resp = await client.get("/getUpdates", params=params)
+                resp.raise_for_status()
+            except httpx.HTTPError as e:
+                logger.warning(f"TG getUpdates error: {e}")
+                await asyncio.sleep(5)
+                continue
+
+            for upd in resp.json().get("result", []):
+                offset = upd["update_id"] + 1
+                STATE["offset"] = offset
+                save_state(STATE)
+
+                message = upd.get("message") or upd.get("edited_message")
+                if not message:
+                    continue
+                chat_id = message["chat"]["id"]
+                if chat_id not in ALLOWED_CHAT_IDS:
+                    warn = f"⛔️ У вас нет доступа к этому боту. Ваш chat_id: {chat_id}"
+                    logger.info(f"Unknown chat {chat_id} → sending deny message")
+                    try:
+                        await client.post("/sendMessage", data={"chat_id": chat_id, "text": warn})
+                    except httpx.HTTPError as e:
+                        logger.error(f"TG deny send error: {e}")
+            # loop continues immediately (long-poll)
+
+
+async def main() -> None:
+    logger.info("🚀 notifier started. Allowed chats: %s", ", ".join(map(str, ALLOWED_CHAT_IDS)))
+
+    async with PocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb:
+        # Запускаем слушатель Telegram
+        tg_task = asyncio.create_task(listen_updates())
+
+        try:
+            while True:
+                try:
+                    await run_pb_cycle(pb)
+                except Exception:
+                    logger.exception("PB cycle error")
+                logger.info("sleep %s sec …", CHECK_INTERVAL)
+                await asyncio.sleep(CHECK_INTERVAL)
+        finally:
+            tg_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await tg_task
 
 if __name__ == "__main__":
-    asyncio.run(run_real_mode())
+    # Я убрал из примера циклы listen_updates и main, 
+    # так как они не менялись, но в вашем файле они должны остаться.
+    # Этот блок для демонстрации
+    async def run_once():
+        logger.info("🚀 Notifier started. Allowed chats: %s", ", ".join(map(str, ALLOWED_CHAT_IDS)))
+        async with PocketBaseClient(base_url=PB_URL, email=PB_EMAIL, password=PB_PASSWORD) as pb:
+            await run_pb_cycle(pb)
+
+    try:
+        # Для проверки можно запустить один раз
+        asyncio.run(run_once())
+        # В рабочем режиме вы вернете ваш оригинальный main()
+        # asyncio.run(main()) 
+    except KeyboardInterrupt:
+        logger.info("Exiting on Ctrl-C")
+    except Exception as e:
+        logger.exception(f"Критическая ошибка: {e}")
+

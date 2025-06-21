@@ -58,6 +58,7 @@ services:
       - "9001:9001"
       - "9101:9101"
     env_file: .env
+    restart: unless-stopped
     depends_on:
       - nats
 
@@ -66,6 +67,7 @@ services:
       context: .
       dockerfile: services/parser_worker/Dockerfile
     env_file: .env
+    restart: unless-stopped
     depends_on:
       - nats
     ports:
@@ -78,17 +80,32 @@ services:
       context: .
       dockerfile: services/pb_writer/Dockerfile
     env_file: .env
+    restart: unless-stopped
     depends_on:
       - nats
       # - pocketbase
     ports:
       - "9103:9103"   # metrics
 
+
+  dashboard:
+    build: 
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    env_file: .env
+    volumes:
+      - "./last_state.json:/app/last_state.json"
+    depends_on:
+      - nats
+      # - pocketbase
+
+
   xml_watcher:
     build: 
       context: .
       dockerfile: services/xml_watcher/Dockerfile
     env_file: .env
+    restart: unless-stopped
     environment:
       - BACKUP_DIR=/backups
     depends_on:

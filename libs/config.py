@@ -24,31 +24,35 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # ── Redis ────────────────────────────────────────────────────────────────
-    nats_dsn: str = Field("redis://localhost:6379/0", env="NATS_DSN")
+    nats_dsn: str = Field("redis://localhost:6379/0", env="NATS_DSN") # type: ignore
 
     # ── PocketBase ───────────────────────────────────────────────────────────
-    pb_url: str = Field("http://127.0.0.1:8090", env="PB_URL")
-    pb_email: Optional[str] = Field(None, env="PB_EMAIL")
-    pb_password: Optional[str] = Field(None, env="PB_PASSWORD")
+    pb_url: str = Field("http://127.0.0.1:8090", env="PB_URL") # type: ignore
+    pb_email: Optional[str] = Field(None, env="PB_EMAIL") # type: ignore
+    pb_password: Optional[str] = Field(None, env="PB_PASSWORD") # type: ignore
 
     # ── Sentry ───────────────────────────────────────────────────────────────
-    sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN")
-    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
+    sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN") # type: ignore
+    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY") # type: ignore
 
     # ── XML-backup watcher ───────────────────────────────────────────────────
-    backup_dir: Path = Field(Path("./backups"), env="BACKUP_DIR")
+    backup_dir: Path = Field(Path("./backups"), env="BACKUP_DIR") # type: ignore
 
     # ── ngrok (для API-шлюза) ────────────────────────────────────────────────
-    enable_ngrok: bool = Field(False, env="ENABLE_NGROK")
-    ngrok_authtoken: Optional[str] = Field(None, env="NGROK_AUTHTOKEN")
-    ngrok_domain: Optional[str] = Field(None, env="NGROK_DOMAIN") 
-    api_host: Optional[str] = Field("0.0.0.0", env="API_HOST") 
-    api_port: Optional[int] = Field(9001, env="API_PORT") 
+    enable_ngrok: bool = Field(False, env="ENABLE_NGROK") # type: ignore
+    ngrok_authtoken: Optional[str] = Field(None, env="NGROK_AUTHTOKEN")  # type: ignore
+    ngrok_domain: Optional[str] = Field(None, env="NGROK_DOMAIN")  # type: ignore
+    api_host: Optional[str] = Field("0.0.0.0", env="API_HOST")  # type: ignore
+    api_port: Optional[int] = Field(9001, env="API_PORT")  # type: ignore
 
     # ── Метрики (по портам) ──────────────────────────────────────────────────
-    api_metrics_port: int = Field(9101, env="API_METRICS_PORT")
-    parser_metrics_port: int = Field(9102, env="PARSER_METRICS_PORT")
-    pbwriter_metrics_port: int = Field(9103, env="PBWRITER_METRICS_PORT")
+    api_metrics_port: int = Field(9101, env="API_METRICS_PORT") # type: ignore
+    parser_metrics_port: int = Field(9102, env="PARSER_METRICS_PORT") # type: ignore
+    pbwriter_metrics_port: int = Field(9103, env="PBWRITER_METRICS_PORT") # type: ignore
+
+    tg_bot_token: str = Field( env="API_METRICS_PORT") # type: ignore
+    tg_chat_ids: str = Field( env="API_METRICS_PORT") # type: ignore
+    check_interval_seconds: int = Field( env="CHECK_INTERVAL_SECONDS") # type: ignore
 
     # ── Валидация ────────────────────────────────────────────────────────────
     @model_validator(mode="after")

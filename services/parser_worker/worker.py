@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import logging
 import os
+import re
 import signal
 import sys
 from contextlib import suppress
@@ -36,7 +37,7 @@ from metrics import (
 )
 
 logger = logging.getLogger("parser_worker")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 
 # ---------------------------------------------------------------------------
 # Core processing logic
@@ -108,26 +109,14 @@ async def _process_one(
         return
     if not isinstance(parsed_sms.date, datetime):
         logger.warning("Не считалась дата: %s", raw_sms.body[:60])
-    else:
-        # Перепроверяем дату
-        fix_broken_datetime(parsed_sms)
 
     success_payload = parsed_sms.model_dump_json().encode()
 
     await js.publish(SUBJECT_PARSED, success_payload)
     PARSED_OK.inc()
-    logger.info("Успешно обработано: %s", raw_sms.body[:60])
+    logger.info("Успешно обработано: %s", raw_sms.body[:120])
+    logger.debug("Сообщение: %s", success_payload)
     await msg.ack()
-
-def fix_broken_datetime(parsed_sms):
-    if parsed_sms.date.month != parsed_sms.date.day:
-        formatted_date = parsed_sms.date.strftime("%m.%d.%y")
-        if formatted_date in parsed_sms.raw_body:
-            parsed_sms.date = parsed_sms.date.replace(month=parsed_sms.date.day, day=parsed_sms.date.month)
-        formatted_date = parsed_sms.date.strftime("%m.%d.%Y")
-        if formatted_date in parsed_sms.raw_body:
-            parsed_sms.date = parsed_sms.date.replace(month=parsed_sms.date.day, day=parsed_sms.date.month)
-
 
 # ---------------------------------------------------------------------------
 # Main loop
