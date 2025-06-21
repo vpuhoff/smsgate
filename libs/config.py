@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings
 
 # --------------------------------------------------------------------------- #
@@ -28,8 +28,8 @@ class Settings(BaseSettings):
 
     # ── PocketBase ───────────────────────────────────────────────────────────
     pb_url: str = Field("http://127.0.0.1:8090", env="PB_URL") # type: ignore
-    pb_email: str = Field("", env="PB_EMAIL") # type: ignore
-    pb_password: str = Field("", env="PB_PASSWORD") # type: ignore
+    pb_email: str = Field(env="PB_EMAIL") # type: ignore
+    pb_password: str = Field(env="PB_PASSWORD") # type: ignore
 
     # ── Sentry ───────────────────────────────────────────────────────────────
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN") # type: ignore
@@ -65,6 +65,40 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
         case_sensitive = False
 
+    # ── PostgreSQL ─────────────────────────────────────────────────────────
+    # Эти переменные считываются из .env и используются для Docker Compose
+    # и для подключения из приложения.
+    postgres_user: str = Field(env="POSTGRES_USER") # type: ignore
+    postgres_password: str = Field(env="POSTGRES_PASSWORD") # type: ignore
+    postgres_db: str = Field(env="POSTGRES_DB") # type: ignore
+    postgres_host: str = Field("localhost", env="POSTGRES_HOST") # type: ignore
+    postgres_port: int = Field(5432, env="POSTGRES_PORT") # type: ignore
+
+    @computed_field # Используем @computed_field для Pydantic v2
+    @property
+    def database_url(self) -> str:
+        """
+        Генерирует URL для подключения к базе данных SQLAlchemy.
+        Формат: postgresql+psycopg2://user:password@host:port/db
+        """
+        return (
+            "postgresql+psycopg2://"
+            f"{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @computed_field # Используем @computed_field для Pydantic v2
+    @property
+    def database_url_async(self) -> str:
+        """
+        Генерирует URL для подключения к базе данных SQLAlchemy.
+        Формат: postgresql+psycopg2://user:password@host:port/db
+        """
+        return (
+            "postgresql+asyncpg://"
+            f"{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
 
 # --------------------------------------------------------------------------- #
 # Public helper
