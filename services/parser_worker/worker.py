@@ -109,7 +109,8 @@ async def _process_one(
         return
     if not isinstance(parsed_sms.date, datetime):
         logger.warning("Не считалась дата: %s", raw_sms.body[:60])
-
+    if parsed.date > datetime.now():
+        raise Exception("Bad date")
     success_payload = parsed_sms.model_dump_json().encode()
 
     await js.publish(SUBJECT_PARSED, success_payload)

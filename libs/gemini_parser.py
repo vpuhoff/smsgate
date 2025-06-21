@@ -84,7 +84,7 @@ def fix_broken_datetime(message, current_date):
             updated_date = datetime.combine(date_object.date(), current_date.time())
 
             if updated_date != current_date:
-                print(f"Найдена и исправлена дата: {updated_date.strftime('%d.%m.%Y')}")
+                print(f"Найдена и исправлена дата: {updated_date.strftime(date_format)}")
                 return updated_date
             
             # Если дата совпала, нет смысла искать дальше
@@ -138,7 +138,8 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
     Отправляет текст SMS в Gemini и пытается вернуть ParsedSMS.
     В случае любой ошибки → None (worker переложит в sms_failed + Sentry).
     """
-    if 'OTP' in raw.body or 'CODE:' in raw.body:
+    otp_keywords = ('OTP', 'CODE:', 'PASS:', 'PASS=', 'Daily limit exceeded:')
+    if any(keyword in raw.body for keyword in otp_keywords):
         return None
     # Исправляем длинные номера карт
     fixed_body = mask_card_number_with_prefix(raw.body)
