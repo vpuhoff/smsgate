@@ -16,8 +16,7 @@ import signal
 from typing import Any, Dict
 
 from fastapi.concurrency import asynccontextmanager
-import nats
-import ngrok                                   # ✨ <-- ngrok SDK
+import ngrok
 import uvicorn
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -26,7 +25,8 @@ from libs.config import get_settings
 from libs.models import RawSMS, get_md5_hash
 from libs.nats_utils import publish_raw_sms, get_nats_connection
 from libs.sentry import sentry_capture
-from schemas import RawSMSPayload  # ✨ импортируем из отдельного модуля
+from schemas import RawSMSPayload
+from pathlib import Path
 
 # ---------------------------------------------------------------------------#
 # Graceful shutdown helpers (optional)                                       #
@@ -43,6 +43,18 @@ async def lifespan(app: FastAPI):
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="SMS API Gateway", version="0.1.0", lifespan=lifespan)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# ✨  Файловое логирование
+# ──────────────────────────────────────────────────────────────────────────
+LOG_DIR = Path("/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+_file_handler = logging.FileHandler(LOG_DIR / "api_gateway.log", encoding="utf-8")
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+)
+logger.addHandler(_file_handler)
 
 # ---------------------------------------------------------------------------#
 # ngrok helpers                                                              #
@@ -94,6 +106,7 @@ async def post_raw_sms(payload: RawSMSPayload) -> JSONResponse:  # noqa: D401
     """Принимаем сырое SMS-сообщение и кладём в Redis Stream `sms_raw`."""
     try:
         payload_data = payload.model_dump()
+        logger.debug("↘︎ /sms/raw payload: %s", payload_data)
         data = {
             "msg_id": get_md5_hash(payload_data.get("message")),
             "sender": payload_data.get("sender"),
@@ -104,12 +117,14 @@ async def post_raw_sms(payload: RawSMSPayload) -> JSONResponse:  # noqa: D401
         }
         raw_sms = RawSMS.model_validate(data)
     except Exception as exc:  # pydantic validation fails
+        logger.warning("Payload validation failed", exc_info=True)
         sentry_capture(exc)
         raise HTTPException(status_code=400, detail="Invalid payload") from exc
 
     try:
         nuts = await get_nats_connection()
         await publish_raw_sms(nuts, raw_sms)  # публикуем
+        logger.info("Queued raw SMS %s", raw_sms.msg_id)
         return JSONResponse(content={"result": "queued"}, status_code=status.HTTP_202_ACCEPTED)
     except Exception as exc:  # pragma: no cover – network
         sentry_capture(exc)

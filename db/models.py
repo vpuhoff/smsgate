@@ -13,10 +13,10 @@ class SmsData(Base):
 
     # Обязательные поля (nullable=False)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    original_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    original_body: Mapped[str] = mapped_column(String, nullable=False)
+    msg_id: Mapped[str] = mapped_column("original_key", String, unique=True, nullable=False)
+    original_body: Mapped[str] = mapped_column("raw_body", String, nullable=False)
     sender: Mapped[str] = mapped_column(String, nullable=False)
-    datetime: Mapped[dt] = mapped_column(DateTime(timezone=True), nullable=False)
+    datetime: Mapped[dt] = mapped_column("date", DateTime(timezone=True), nullable=False)
     card: Mapped[str] = mapped_column(String(4), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
@@ -29,9 +29,12 @@ class SmsData(Base):
     address: Mapped[str | None] = mapped_column(String)
     city: Mapped[str | None] = mapped_column(String)
 
+    device_id: Mapped[str | None] = mapped_column(String)
+    parser_version: Mapped[str | None] = mapped_column(String)
+
     __table_args__ = (
         Index("idx_sms_sender", "sender"),
-        Index("idx_sms_datetime", "datetime"),
+        Index("idx_sms_datetime", "date"),
         Index("idx_sms_txn_type", "txn_type"),
     )
 

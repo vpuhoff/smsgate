@@ -73,6 +73,8 @@ services:
     restart: unless-stopped
     depends_on:
       - nats
+    volumes:
+      - .logs:/logs
 
   parser_worker:
     build: 

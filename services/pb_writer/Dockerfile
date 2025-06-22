@@ -20,6 +20,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir ngrok
 
 COPY libs /app/libs
+COPY db /app/db
 COPY services/pb_writer/*.py /app
 
 WORKDIR /app

@@ -22,6 +22,7 @@ from libs.nats_utils import (
 )
 from libs.sentry import init_sentry, sentry_capture
 from libs.pocketbase import upsert_parsed_sms
+from upsert import upsert_parsed_sms as upsert_parsed_sms_db
 
 
 settings = get_settings()
@@ -57,6 +58,7 @@ async def _calc_lag(js, durable: str) -> None:
 async def _safe_upsert(parsed: ParsedSMS) -> None:
     """Идемпотентный upsert с автоматическим бэк-оффом."""
     await upsert_parsed_sms(parsed)
+    await upsert_parsed_sms_db(parsed.model_dump())
     PARSED_OK.inc()
 
 
