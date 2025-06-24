@@ -31,6 +31,8 @@ from libs.gemini_parser import parse_sms_llm
 from libs.sentry import init_sentry, sentry_capture
 
 from metrics import (
+    ACK_PENDING,
+    GEMINI_LATENCY,
     PARSED_FAIL,
     PARSED_OK,
     PROCESSING_TIME,
@@ -51,12 +53,19 @@ async def _process_one(
     """Parse *one* Raw SMS from a NATS message and publish the result."""
     
     js = nc.jetstream()
-    
+
+    await ensure_stream(nc)
+
+    logger.debug("⏱  V: start-validate %s", msg.metadata.sequence)
+
     try:
+        logger.info(f"Обрабатываем сообщение {msg}")
         # Декодируем и валидируем сырое сообщение
         raw_sms_data = json.loads(msg.data)
         raw_sms = RawSMS(**raw_sms_data)
+        logger.debug("✅  V: ok %s", msg.metadata.sequence)
     except Exception as err:
+        logger.error("❌  V: fail %s – %s", msg.metadata.sequence, err)
         logger.error("Ошибка валидации сообщения: %s. Данные: %s", err, msg.data)
         # Некорректная схема — сразу в DLQ
         failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
@@ -80,8 +89,12 @@ async def _process_one(
     # Основная логика парсинга
     with PROCESSING_TIME.time():
         try:
-            parsed = parse_sms_llm(raw_sms)
+            with GEMINI_LATENCY.time():
+                logger.info("Начинаем парсинг с LLM")
+                parsed = parse_sms_llm(raw_sms)
+                logger.debug("✅  P: ok %s", msg.metadata.sequence)
         except Exception as err:
+            logger.error("❌  P: fail %s – %s", msg.metadata.sequence, err)
             logger.error("Ошибка парсинга SMS: %s. SMS: %s", err, raw_sms)
             failure_payload = json.dumps({"err": str(err), "entry": raw_sms.model_dump()}).encode()
             await js.publish(SUBJECT_FAILED, failure_payload)
@@ -90,40 +103,41 @@ async def _process_one(
             await msg.ack()
             return
             
-    if parsed is None:
-        # Нераспознанный формат – в DLQ без stacktrace
-        logger.warning("Не удалось распознать SMS → DLQ: %s", raw_sms.body[:60])
-        failure_payload = json.dumps({"reason": "unmatched", "raw": raw_sms.model_dump()}).encode()
-        await js.publish(SUBJECT_FAILED, failure_payload)
-        PARSED_FAIL.inc()
-        await msg.ack()
-        return
+        if parsed is None:
+            # Нераспознанный формат – в DLQ без stacktrace
+            logger.warning("Не удалось распознать SMS → DLQ: %s", raw_sms.body[:60])
+            failure_payload = json.dumps({"reason": "unmatched", "raw": raw_sms.model_dump()}).encode()
+            await js.publish(SUBJECT_FAILED, failure_payload)
+            PARSED_FAIL.inc()
+            await msg.ack()
+            return
 
-    # Успешный парсинг: обогащаем и публикуем
-    try:
-        parsed_sms = ParsedSMS(**parsed.model_dump())
-    except Exception as err:
-        failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
-        await js.publish(SUBJECT_FAILED, failure_payload)
-        PARSED_FAIL.inc()
-        await msg.ack()
-        return
-    if not isinstance(parsed_sms.date, datetime):
-        logger.warning("Не считалась дата: %s", raw_sms.body[:60])
-    if parsed.date > datetime.now():
-        logger.error(f"Дата больше чем сегодня: {parsed.date}")
-        failure_payload = json.dumps({"err": str("Дата больше чем сегодня"), "entry": msg.data.decode(errors='ignore')}).encode()
-        await js.publish(SUBJECT_FAILED, failure_payload)
-        PARSED_FAIL.inc()
-        await msg.ack()
-    else:
-        success_payload = parsed_sms.model_dump_json().encode()
-        await js.publish(SUBJECT_PARSED, success_payload)
-        await js.publish(SUBJECT_PROCESSING, success_payload)
-        PARSED_OK.inc()
-        logger.info("Успешно обработано: %s", raw_sms.body[:120])
-        logger.debug("Сообщение: %s", success_payload)
-        await msg.ack()
+        # Успешный парсинг: обогащаем и публикуем
+        try:
+            parsed_sms = ParsedSMS(**parsed.model_dump())
+        except Exception as err:
+            failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
+            await js.publish(SUBJECT_FAILED, failure_payload)
+            PARSED_FAIL.inc()
+            await msg.ack()
+            return
+        if not isinstance(parsed_sms.date, datetime):
+            logger.warning("Не считалась дата: %s", raw_sms.body[:60])
+        if parsed.date > datetime.now():
+            logger.error(f"Дата больше чем сегодня: {parsed.date}")
+            failure_payload = json.dumps({"err": str("Дата больше чем сегодня"), "entry": msg.data.decode(errors='ignore')}).encode()
+            await js.publish(SUBJECT_FAILED, failure_payload)
+            PARSED_FAIL.inc()
+            await msg.ack()
+        else:
+            logger.info(f"Start publish: {raw_sms.body[:120]}")
+            success_payload = parsed_sms.model_dump_json().encode()
+            await js.publish(SUBJECT_PARSED, success_payload)
+            await js.publish(SUBJECT_PROCESSING, success_payload)
+            PARSED_OK.inc()
+            logger.info("Успешно обработано: %s", raw_sms.body[:120])
+            logger.debug("Сообщение: %s", success_payload)
+            await msg.ack()
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -154,6 +168,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+async def _stats_loop(js, durable):
+    while True:
+        info = await js.consumer_info("SMS", durable)  # один системный RPC
+        ACK_PENDING.set(info.num_ack_pending)
+        await asyncio.sleep(5)                         # частота обновления
+
+
 async def _amain(argv: list[str] | None = None) -> None:  # pragma: no cover
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     _ = get_settings()
@@ -165,11 +186,7 @@ async def _amain(argv: list[str] | None = None) -> None:  # pragma: no cover
     nc = await get_nats_connection()
     
     # Убеждаемся, что стрим и все нужные нам субъекты существуют
-    await ensure_stream(
-        nc=nc,
-        stream_name="SMS",
-        subjects=[SUBJECT_RAW, SUBJECT_PARSED, SUBJECT_FAILED]
-    )
+    await ensure_stream(nc=nc)
 
     # Graceful shutdown
     stop_event = asyncio.Event()
@@ -183,10 +200,14 @@ async def _amain(argv: list[str] | None = None) -> None:  # pragma: no cover
         loop.add_signal_handler(sig, _sig_handler)
 
     worker_task = asyncio.create_task(_worker_loop(nc, args.group))
-    
+    stats_task  = asyncio.create_task(_stats_loop(nc.jetstream(), args.group))
+
     await stop_event.wait()
     
     worker_task.cancel()
+    stats_task.cancel()
+    await nc.drain()
+
     with suppress(asyncio.CancelledError):
         await worker_task
         

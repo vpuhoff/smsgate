@@ -16,7 +16,7 @@ import os
 import time
 from typing import Awaitable, Callable, Coroutine, Sequence
 
-from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, Summary, start_http_server
 from redis.asyncio import Redis
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,17 @@ PROCESSING_TIME = Histogram(
     buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
 )
 
+# Время сетевого вызова Gemini (чтобы отличать лаг LLM от нашего кода)
+GEMINI_LATENCY = Summary(
+    "sms_parser_gemini_seconds",
+    "Длительность вызова Gemini (сек)"
+)
+
+# Сколько сообщений висит у consumer в AckPending
+ACK_PENDING = Gauge(
+    "sms_parser_ack_pending",
+    "Текущее число не-ACK-нутых сообщений у durable-consumer"
+)
 
 # ---------------------------------------------------------------------------
 # Helper decorators / context managers

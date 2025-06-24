@@ -26,6 +26,8 @@ SUBJECT_RAW = "sms.raw"          # Cырые сообщения от поста�
 SUBJECT_PARSED = "sms.parsed"    # Успешно обработанные сообщения
 SUBJECT_PROCESSING = "sms.processing"    # Успешно обработанные сообщения
 SUBJECT_FAILED = "sms.failed"    # DLQ для обработчиков
+SUBJECT_CATEGORIZED = "sms.categorized"
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ async def get_nats_connection() -> NATS:  # pragma: no cover – network
     return nc
 
 
-async def ensure_stream(nc: NATS, stream_name: str, subjects: list[str]):
+async def ensure_stream(nc: NATS):
     """
     Проверяет существование стрима и создает/обновляет его, если он отсутствует или его конфигурация устарела.
     Эта функция идемпотентна: её можно безопасно вызывать многократно.
@@ -59,6 +61,9 @@ async def ensure_stream(nc: NATS, stream_name: str, subjects: list[str]):
     subjects: list[str]
         Список субъектов, которые будет слушать этот стрим (например, ["sms.raw", "sms.failed"]).
     """
+    stream_name = "SMS"
+    subjects = [SUBJECT_RAW, SUBJECT_PARSED,
+                SUBJECT_FAILED, SUBJECT_PROCESSING, SUBJECT_CATEGORIZED]
     logging.debug(f"Проверка и создание стрима '{stream_name}' для субъектов {subjects}...")
     jsm = nc.jetstream()
     
@@ -67,7 +72,7 @@ async def ensure_stream(nc: NATS, stream_name: str, subjects: list[str]):
         subjects=subjects,
         storage=StorageType.FILE,
         retention=RetentionPolicy.LIMITS,
-        max_age=60 * 60 * 24 * 120,  # 120 дней в секундах
+        max_age=60 * 60 * 24 * 3,  # 120 дней в секундах
     )
 
     try:
@@ -116,11 +121,7 @@ async def publish_raw_sms(
         nc = await get_nats_connection()
 
     # Убеждаемся, что стрим существует и слушает все нужные каналы
-    await ensure_stream(
-        nc=nc,
-        stream_name="SMS",
-        subjects=[SUBJECT_RAW, SUBJECT_PARSED, SUBJECT_FAILED]
-    )
+    await ensure_stream(nc=nc)
 
     js = nc.jetstream()
     payload = sms.model_dump_json().encode('utf-8')
