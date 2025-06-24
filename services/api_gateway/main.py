@@ -27,11 +27,13 @@ from libs.nats_utils import publish_raw_sms, get_nats_connection
 from libs.sentry import sentry_capture
 from schemas import RawSMSPayload
 from pathlib import Path
+from libs.config import get_settings
 
 # ---------------------------------------------------------------------------#
 # Graceful shutdown helpers (optional)                                       #
 # ---------------------------------------------------------------------------#
 shutdown_event = asyncio.Event()
+settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,7 +50,7 @@ app = FastAPI(title="SMS API Gateway", version="0.1.0", lifespan=lifespan)
 # ──────────────────────────────────────────────────────────────────────────
 # ✨  Файловое логирование
 # ──────────────────────────────────────────────────────────────────────────
-LOG_DIR = Path("/logs")
+LOG_DIR = Path(settings.log_dir)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 _file_handler = logging.FileHandler(LOG_DIR / "api_gateway.log", encoding="utf-8")
 _file_handler.setFormatter(
@@ -117,7 +119,7 @@ async def post_raw_sms(payload: RawSMSPayload) -> JSONResponse:  # noqa: D401
         }
         raw_sms = RawSMS.model_validate(data)
     except Exception as exc:  # pydantic validation fails
-        logger.warning("Payload validation failed", exc_info=True)
+        logger.error("Payload validation failed", exc_info=True)
         sentry_capture(exc)
         raise HTTPException(status_code=400, detail="Invalid payload") from exc
 
@@ -147,6 +149,7 @@ async def health() -> Dict[str, Any] | JSONResponse:  # noqa: D401
     except Exception as e:
         # Ловим другие возможные ошибки
         print(f"❌ Произошла непредвиденная ошибка при подключении: {e}")
+        logger.error(f"Произошла непредвиденная ошибка при подключении: {e}", exc_info=True)
         sentry_capture(e)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

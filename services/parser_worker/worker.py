@@ -20,6 +20,7 @@ from nats.aio.msg import Msg
 from libs.config import get_settings
 from libs.models import ParsedSMS, RawSMS
 from libs.nats_utils import (
+    SUBJECT_PROCESSING,
     get_nats_connection,
     ensure_stream,
     SUBJECT_RAW,
@@ -110,14 +111,19 @@ async def _process_one(
     if not isinstance(parsed_sms.date, datetime):
         logger.warning("Не считалась дата: %s", raw_sms.body[:60])
     if parsed.date > datetime.now():
-        raise Exception("Bad date")
-    success_payload = parsed_sms.model_dump_json().encode()
-
-    await js.publish(SUBJECT_PARSED, success_payload)
-    PARSED_OK.inc()
-    logger.info("Успешно обработано: %s", raw_sms.body[:120])
-    logger.debug("Сообщение: %s", success_payload)
-    await msg.ack()
+        logger.error(f"Дата больше чем сегодня: {parsed.date}")
+        failure_payload = json.dumps({"err": str("Дата больше чем сегодня"), "entry": msg.data.decode(errors='ignore')}).encode()
+        await js.publish(SUBJECT_FAILED, failure_payload)
+        PARSED_FAIL.inc()
+        await msg.ack()
+    else:
+        success_payload = parsed_sms.model_dump_json().encode()
+        await js.publish(SUBJECT_PARSED, success_payload)
+        await js.publish(SUBJECT_PROCESSING, success_payload)
+        PARSED_OK.inc()
+        logger.info("Успешно обработано: %s", raw_sms.body[:120])
+        logger.debug("Сообщение: %s", success_payload)
+        await msg.ack()
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -144,7 +150,7 @@ async def _worker_loop(nc: NATS, consumer_group: str) -> None:  # pragma: no cov
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Parser Worker for SMS pipeline")
     p.add_argument("--name", default=f"{os.uname().nodename}-{os.getpid()}", help="Уникальное имя этого воркера")
-    p.add_argument("--group", default="parsers", help="Имя группы консьюмеров (durable name)")
+    p.add_argument("--group", default="parser_worker", help="Имя группы консьюмеров (durable name)")
     return p.parse_args(argv)
 
 

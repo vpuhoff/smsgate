@@ -65,6 +65,7 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
         case_sensitive = False
 
+    log_dir: str = Field(env="LOG_DIR") # type: ignore
     # ── PostgreSQL ─────────────────────────────────────────────────────────
     # Эти переменные считываются из .env и используются для Docker Compose
     # и для подключения из приложения.

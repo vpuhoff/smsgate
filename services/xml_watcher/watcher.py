@@ -19,9 +19,6 @@ import sys
 from typing import Iterable, List
 
 import xml.etree.ElementTree as ET
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
-
 from libs.config import get_settings
 from libs.models import RawSMS
 from libs.nats_utils import publish_raw_sms, get_nats_connection
@@ -31,6 +28,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("xml_watcher")
 log.setLevel(logging.INFO)
 
+SCAN_INTERVAL = 10  # секунд
 # ────────────────────────── XML helpers ──────────────────────────────
 
 
@@ -64,24 +62,15 @@ def _move_to_processed(src: Path, processed_dir: Path) -> None:
     log.info("Moved %s → %s", src, dst)
 
 
-# ───────────────────────── watchdog handler ──────────────────────────
+# ───────────────────────── обработчик XML ────────────────────────────
 
 
-class XMLHandler(FileSystemEventHandler):
+class XMLHandler:
     """Обрабатывает появление новых XML-файлов."""
 
     def __init__(self, processed_dir: Path, loop: asyncio.AbstractEventLoop) -> None:
-        super().__init__()
         self._processed_dir = processed_dir
         self._loop = loop
-
-    # события watchdog приходят из другого потока → задачки запускаем thread-safe
-    def on_created(self, event) -> None:  # type: ignore[override]
-        if event.is_directory or not event.src_path.endswith(".xml"):
-            return
-        asyncio.run_coroutine_threadsafe(
-            self._process(Path(event.src_path)), self._loop
-        )
 
     async def _process(self, xml_path: Path) -> None:
         log.info("Processing %s", xml_path)
@@ -102,13 +91,17 @@ class XMLHandler(FileSystemEventHandler):
 # ───────────────────────────── main ──────────────────────────────────
 
 
-async def _bootstrap_existing(loop: asyncio.AbstractEventLoop,
-                              backup_dir: Path,
-                              processed_dir: Path) -> None:
-    """При старте обрабатываем XML-ы, которые уже лежат в директории."""
-    for xml_file in backup_dir.glob("*.xml"):
-        log.info("Processing %s", xml_file)
-        await XMLHandler(processed_dir, loop)._process(xml_file)
+async def _scan_loop(loop: asyncio.AbstractEventLoop,
+                     backup_dir: Path,
+                     processed_dir: Path) -> None:
+    """Раз в SCAN_INTERVAL секунд ищем новые XML-файлы и обрабатываем их."""
+    handler = XMLHandler(processed_dir, loop)
+
+    while True:
+        for xml_file in backup_dir.glob("*.xml"):
+            # если файл ещё лежит в backup_dir, значит не обработан
+            await handler._process(xml_file)
+        await asyncio.sleep(SCAN_INTERVAL)
 
 
 def main() -> None:
@@ -117,27 +110,19 @@ def main() -> None:
 
     backup_dir = Path(settings.backup_dir).resolve()
     processed_dir = backup_dir / "processed"
-    log.info("Watching XML dir: %s", backup_dir)
+    log.info("Watching XML dir: %s (polling every %ss)", backup_dir, SCAN_INTERVAL)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # обработчик + observer
-    handler = XMLHandler(processed_dir, loop)
-    observer = Observer()
-    observer.schedule(handler, str(backup_dir), recursive=False)
-    observer.start()
-
-    # подтягиваем уже существующие файлы
-    loop.create_task(_bootstrap_existing(loop, backup_dir, processed_dir))
+    # запускаем фоновое сканирование
+    loop.create_task(_scan_loop(loop, backup_dir, processed_dir))
 
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        observer.stop()
-        observer.join()
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 

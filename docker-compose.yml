@@ -70,6 +70,8 @@ services:
       - "9001:9001"
       - "9101:9101"
     env_file: .env
+    environment:
+      - LOG_DIR=/logs
     restart: unless-stopped
     depends_on:
       - nats
@@ -108,8 +110,6 @@ services:
       dockerfile: services/dashboard/Dockerfile
     env_file: .env
     restart: unless-stopped
-    volumes:
-      - "./last_state.json:/app/last_state.json"
     depends_on:
       - nats
       # - pocketbase

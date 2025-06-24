@@ -24,6 +24,7 @@ from libs.models import RawSMS
 # В NATS принято называть каналы "субъектами" (subjects)
 SUBJECT_RAW = "sms.raw"          # Cырые сообщения от поставщика
 SUBJECT_PARSED = "sms.parsed"    # Успешно обработанные сообщения
+SUBJECT_PROCESSING = "sms.processing"    # Успешно обработанные сообщения
 SUBJECT_FAILED = "sms.failed"    # DLQ для обработчиков
 
 logger = logging.getLogger(__name__)
