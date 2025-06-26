@@ -46,6 +46,8 @@ from dateutil import parser as dt_parse
 
 from libs.config import get_settings
 from libs.pocketbase import AsyncPocketBaseClient, PocketBaseClient
+import kaleido
+
 
 # ---------- Логирование ----------
 logging.basicConfig(

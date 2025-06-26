@@ -10,6 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \ 
     PYTHONDONTWRITEBYTECODE=1
 
+ENV TZ Asia/Yerevan
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 WORKDIR /app
 
 # --- install UV package manager ------------------------------------------------

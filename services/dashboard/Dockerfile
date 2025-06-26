@@ -5,6 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \ 
     PYTHONDONTWRITEBYTECODE=1
 
+ENV TZ Asia/Yerevan
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 WORKDIR /app
 
 # --- install UV package manager ------------------------------------------------
@@ -13,11 +16,13 @@ RUN apt-get update && apt-get install -y curl && \
     apt-get purge -y --auto-remove curl && \
     rm -rf /var/lib/apt/lists/*
 
+    
+
 ENV PATH="/root/.local/bin:$PATH"
 
 # --- copy project --------------------------------------------------------------
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir kaleido
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir "kaleido<1.0"
 
 COPY libs /app/libs
 COPY services/dashboard/*.py /app
