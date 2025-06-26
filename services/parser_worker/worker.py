@@ -16,6 +16,7 @@ from typing import Any
 
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
+import sentry_sdk
 
 from libs.config import get_settings
 from libs.models import ParsedSMS, RawSMS
@@ -27,7 +28,7 @@ from libs.nats_utils import (
     SUBJECT_PARSED,
     SUBJECT_FAILED,
 )
-from libs.gemini_parser import parse_sms_llm
+from libs.gemini_parser import BrokenMessage, parse_sms_llm
 from libs.sentry import init_sentry, sentry_capture
 
 from metrics import (
@@ -35,6 +36,7 @@ from metrics import (
     GEMINI_LATENCY,
     PARSED_FAIL,
     PARSED_OK,
+    PARSED_SKIP,
     PROCESSING_TIME,
     start_metrics_server,
 )
@@ -52,92 +54,115 @@ async def _process_one(
 ) -> None:
     """Parse *one* Raw SMS from a NATS message and publish the result."""
     
-    js = nc.jetstream()
+    with sentry_sdk.start_transaction(op="task", name="process_parsing"):
+        with sentry_sdk.start_span(name="check_stream"):
+            js = nc.jetstream()
 
-    await ensure_stream(nc)
+            await ensure_stream(nc)
 
-    logger.debug("⏱  V: start-validate %s", msg.metadata.sequence)
+        logger.debug("⏱  V: start-validate %s", msg.metadata.sequence)
+        with sentry_sdk.start_span(name="validate"):
+            try:
+                logger.info(f"Обрабатываем сообщение {msg}")
+                if isinstance(msg.data, bytes):
+                    # Данный блок обработки для сообщений из DLQ
+                    msg.data = msg.data.decode()
+                    raw_sms_data = json.loads(msg.data)
+                    raw_sms_data = raw_sms_data['raw']
+                else:
+                    # Декодируем и валидируем сырое сообщение
+                    raw_sms_data = json.loads(msg.data)
+                raw_sms = RawSMS(**raw_sms_data)
+                logger.debug("✅  V: ok %s", msg.metadata.sequence)
+            except Exception as err:
+                logger.error("❌  V: fail %s – %s", msg.metadata.sequence, err)
+                logger.error("Ошибка валидации сообщения: %s. Данные: %s", err, msg.data)
+                # Некорректная схема — сразу в DLQ
+                failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
+                await js.publish(SUBJECT_FAILED, failure_payload)
+                PARSED_FAIL.inc()
+                sentry_capture(err, extras={"raw_data": msg.data.decode(errors='ignore')})
+                await msg.ack()
+                return
 
-    try:
-        logger.info(f"Обрабатываем сообщение {msg}")
-        # Декодируем и валидируем сырое сообщение
-        raw_sms_data = json.loads(msg.data)
-        raw_sms = RawSMS(**raw_sms_data)
-        logger.debug("✅  V: ok %s", msg.metadata.sequence)
-    except Exception as err:
-        logger.error("❌  V: fail %s – %s", msg.metadata.sequence, err)
-        logger.error("Ошибка валидации сообщения: %s. Данные: %s", err, msg.data)
-        # Некорректная схема — сразу в DLQ
-        failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
-        await js.publish(SUBJECT_FAILED, failure_payload)
-        PARSED_FAIL.inc()
-        sentry_capture(err, extras={"raw_data": msg.data.decode(errors='ignore')})
-        await msg.ack()
-        return
-
-    if 'OTP' in raw_sms.body.upper() or \
-            'CODE:' in raw_sms.body.upper() or \
-            'NOT ENOUGH FUNDS' in raw_sms.body.upper() or \
-            'INSUFFICIENT FUNDS' in raw_sms.body.upper() or \
-            'CREDIT PAYMENT' in raw_sms.body.upper() or \
-            'C2C RECEIVED' in raw_sms.body.upper() or \
-            'PERSON TO PERSON' in raw_sms.body.upper():
-        PARSED_OK.inc()
-        await msg.ack()
-        return 
-    
-    # Основная логика парсинга
-    with PROCESSING_TIME.time():
-        try:
-            with GEMINI_LATENCY.time():
-                logger.info("Начинаем парсинг с LLM")
-                parsed = parse_sms_llm(raw_sms)
-                logger.debug("✅  P: ok %s", msg.metadata.sequence)
-        except Exception as err:
-            logger.error("❌  P: fail %s – %s", msg.metadata.sequence, err)
-            logger.error("Ошибка парсинга SMS: %s. SMS: %s", err, raw_sms)
-            failure_payload = json.dumps({"err": str(err), "entry": raw_sms.model_dump()}).encode()
-            await js.publish(SUBJECT_FAILED, failure_payload)
-            PARSED_FAIL.inc()
-            sentry_capture(err, extras={"raw_sms": raw_sms.model_dump()})
+        if 'OTP' in raw_sms.body.upper() or \
+                'CODE:' in raw_sms.body.upper() or \
+                'NOT ENOUGH FUNDS' in raw_sms.body.upper() or \
+                'INSUFFICIENT FUNDS' in raw_sms.body.upper() or \
+                'CREDIT PAYMENT' in raw_sms.body.upper() or \
+                'C2C RECEIVED' in raw_sms.body.upper() or \
+                'PASS:' in raw_sms.body.upper() or \
+                'PASS=' in raw_sms.body.upper() or \
+                'Daily limit exceeded' in raw_sms.body or \
+                'PERSON TO PERSON' in raw_sms.body.upper():
+            logger.info("Сообщение OTP типа.")
+            PARSED_OK.inc()
             await msg.ack()
-            return
-            
-        if parsed is None:
-            # Нераспознанный формат – в DLQ без stacktrace
-            logger.warning("Не удалось распознать SMS → DLQ: %s", raw_sms.body[:60])
-            failure_payload = json.dumps({"reason": "unmatched", "raw": raw_sms.model_dump()}).encode()
-            await js.publish(SUBJECT_FAILED, failure_payload)
-            PARSED_FAIL.inc()
-            await msg.ack()
-            return
+            logger.info("Сообщение пропущено.")
+            return 
+
+        logger.info("Начинаем парсинг с LLM")
+        # Основная логика парсинга
+        with sentry_sdk.start_span(name="parsing"):
+            with PROCESSING_TIME.time():
+                try:
+                    with GEMINI_LATENCY.time():
+                        parsed = parse_sms_llm(raw_sms)
+                        logger.debug("✅  P: ok %s", msg.metadata.sequence)
+                except BrokenMessage as err:
+                    logger.error("Сообщение пропущено: %s. SMS: %s", err, raw_sms)
+                    PARSED_SKIP.inc()
+                    await msg.ack()
+                    return
+                except Exception as err:
+                    logger.error("❌  P: fail %s – %s", msg.metadata.sequence, err)
+                    logger.error("Ошибка парсинга SMS: %s. SMS: %s", err, raw_sms)
+                    failure_payload = json.dumps({"err": str(err), "entry": raw_sms.model_dump()}).encode()
+                    await js.publish(SUBJECT_FAILED, failure_payload)
+                    PARSED_FAIL.inc()
+                    sentry_capture(err, extras={"raw_sms": raw_sms.model_dump()})
+                    await msg.ack()
+                    return
+                    
+                if parsed is None:
+                    # Нераспознанный формат – в DLQ без stacktrace
+                    logger.warning("Не удалось распознать SMS → DLQ: %s", raw_sms.body[:60])
+                    failure_payload = json.dumps({"reason": "unmatched", "raw": raw_sms.model_dump()}).encode()
+                    await js.publish(SUBJECT_FAILED, failure_payload)
+                    PARSED_FAIL.inc()
+                    await msg.ack()
+                    return
 
         # Успешный парсинг: обогащаем и публикуем
-        try:
-            parsed_sms = ParsedSMS(**parsed.model_dump())
-        except Exception as err:
-            failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
-            await js.publish(SUBJECT_FAILED, failure_payload)
-            PARSED_FAIL.inc()
-            await msg.ack()
-            return
-        if not isinstance(parsed_sms.date, datetime):
-            logger.warning("Не считалась дата: %s", raw_sms.body[:60])
-        if parsed.date > datetime.now():
-            logger.error(f"Дата больше чем сегодня: {parsed.date}")
-            failure_payload = json.dumps({"err": str("Дата больше чем сегодня"), "entry": msg.data.decode(errors='ignore')}).encode()
-            await js.publish(SUBJECT_FAILED, failure_payload)
-            PARSED_FAIL.inc()
-            await msg.ack()
-        else:
-            logger.info(f"Start publish: {raw_sms.body[:120]}")
-            success_payload = parsed_sms.model_dump_json().encode()
-            await js.publish(SUBJECT_PARSED, success_payload)
-            await js.publish(SUBJECT_PROCESSING, success_payload)
-            PARSED_OK.inc()
-            logger.info("Успешно обработано: %s", raw_sms.body[:120])
-            logger.debug("Сообщение: %s", success_payload)
-            await msg.ack()
+        with sentry_sdk.start_span(name="validate_parsed"):
+            try:
+                parsed_sms = ParsedSMS(**parsed.model_dump())
+            except Exception as err:
+                failure_payload = json.dumps({"err": str(err), "entry": msg.data.decode(errors='ignore')}).encode()
+                sentry_capture(err, extras={"raw_data": msg.data.decode(errors='ignore')})
+                await js.publish(SUBJECT_FAILED, failure_payload)
+                PARSED_FAIL.inc()
+                await msg.ack()
+                return
+        with sentry_sdk.start_span(name="publish"):
+            if not isinstance(parsed_sms.date, datetime):
+                logger.warning("Не считалась дата: %s", raw_sms.body[:60])
+            if parsed.date > datetime.now():
+                logger.error(f"Дата больше чем сегодня: {parsed.date}")
+                failure_payload = json.dumps({"err": str("Дата больше чем сегодня"), "entry": msg.data.decode(errors='ignore')}).encode()
+                sentry_capture(Exception("Дата больше чем текущая"), extras={"raw_data": msg.data.decode(errors='ignore')})
+                await js.publish(SUBJECT_FAILED, failure_payload)
+                PARSED_FAIL.inc()
+                await msg.ack()
+            else:
+                logger.info(f"Start publish: {raw_sms.body[:120]}")
+                success_payload = parsed_sms.model_dump_json().encode()
+                await js.publish(SUBJECT_PARSED, success_payload)
+                await js.publish(SUBJECT_PROCESSING, success_payload)
+                PARSED_OK.inc()
+                logger.info("Успешно обработано: %s", raw_sms.body[:120])
+                logger.debug("Сообщение: %s", success_payload)
+                await msg.ack()
 
 # ---------------------------------------------------------------------------
 # Main loop

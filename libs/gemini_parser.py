@@ -4,7 +4,9 @@ LLM-парсер банковских SMS на основе Google Gemini.
 Точка входа: parse_sms_llm(raw: RawSMS) -> ParsedSMS | None
 """
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Union
+import zoneinfo
 from dateutil.parser import parse
 import os, re, json, hashlib
 import diskcache
@@ -14,6 +16,10 @@ from libs.models   import RawSMS, ParsedSMS
 from libs.llm_core import ParsedSmsCore          # Pydantic-ядро
 from libs.sentry   import sentry_capture         # опционально
 from libs.decimal_utils import parse_ambiguous_decimal
+
+class BrokenMessage(Exception):
+    """Ошибка при разборе входных данных."""
+    pass
 
 # ────────────────────────────────
 # 1. Инициализация клиента Gemini
@@ -130,6 +136,57 @@ def mask_card_number_with_prefix(text: str) -> str:
     # r'CARD:\1' - означает "заменить на строку 'CARD:' плюс то, что было в скобках".
     return re.sub(pattern, r'CARD:\1', text)
 
+def parse_unix_timestamp(
+    ts: Union[int, float, str], tz: str = "UTC", aware: bool = True
+) -> datetime:
+    """
+    Конвертирует Unix-timestamp в `datetime`, автоматически
+    различая секунды и миллисекунды.
+
+    Parameters
+    ----------
+    ts : int | float | str
+        Отметка времени Unix. 10 цифр → секунды, 13 цифр → миллисекунды.
+        Строка предварительно приводится к числу.
+    tz : str, default "UTC"
+        IANA-идентификатор часового пояса для итоговой даты
+        (например ``"Asia/Yerevan"``).
+
+    Returns
+    -------
+    datetime
+        TZ-aware объект `datetime`.
+
+    Raises
+    ------
+    TimestampParseError
+        Если `ts` нельзя привести к числу или оно выглядит «подозрительно»
+        (слишком маленькое/большое для Unix-эпохи).
+    """
+    # — 1. Приводим к числу
+    try:
+        ts_num: float = float(ts)
+    except (TypeError, ValueError):
+        raise Exception(f"Неподдерживаемое значение {ts!r}") from None
+
+    # — 2. Простая эвристика «сколько цифр»
+    #     * < 10**11  ≈ до 5138 г. → секунды
+    #     * ≥ 10**11  → миллисекунды
+    if ts_num < 0:
+        raise Exception("Отрицательные значения не поддерживаются")
+
+    if ts_num < 1e11:              # секунды
+        seconds = ts_num
+    elif 1e11 <= ts_num < 1e14:    # миллисекунды
+        seconds = ts_num / 1_000
+    else:
+        raise Exception("Похоже не Unix-timestamp в сек./мс")
+
+    # — 3. Переводим в datetime UTC и затем в нужный TZ
+    dt_utc = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    dt = dt_utc.astimezone(zoneinfo.ZoneInfo(tz))
+    return dt if aware else dt.replace(tzinfo=None)
+
 # ────────────────────────────────
 # 3. Основная функция
 # ────────────────────────────────
@@ -142,7 +199,8 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
     if any(keyword in raw.body for keyword in otp_keywords):
         return None
     # Исправляем длинные номера карт
-    fixed_body = mask_card_number_with_prefix(raw.body)
+    clean = raw.body.replace('\u00a0', ' ').replace('\u2022', '*')
+    fixed_body = mask_card_number_with_prefix(clean)
 
     resp_data: dict = None # type: ignore
 
@@ -164,10 +222,14 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
         cache[cache_key] = resp_data
 
     try:
-        resp_data['date'] = parse_custom_datetime(resp_data['date'])
+        try:
+            resp_data['date'] = parse_custom_datetime(resp_data['date'])
+        except Exception as e:
+            if 'String does not contain a date' in str(e):
+                resp_data['date'] = parse_unix_timestamp(int(raw.date), tz="Asia/Yerevan", aware=False)
         resp_data['date'] = fix_broken_datetime(raw.body, resp_data['date'])
 
-        resp_data['card'] = resp_data['card'].replace("*", '')
+        resp_data['card'] = resp_data['card'].replace("*", '').replace(" ", '')
         if len(resp_data['card']) > 4:
             resp_data['card'] = resp_data['card'][:4]
         resp_data['amount'] = parse_ambiguous_decimal(str(resp_data['amount']))
@@ -181,12 +243,15 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
     if core.address == "null":
         core.address = ""
 
+    if len(str(core.card)) < 4:
+        raise BrokenMessage("Нет номера карты в сообщении")
+
     parsed = ParsedSMS(
         msg_id   = raw.msg_id,
         device_id= raw.device_id,
         sender   = raw.sender,
         date     = core.date,
-        raw_body = raw.body,
+        raw_body = fixed_body,
 
         txn_type = core.txn_type,
         amount   = core.amount,
@@ -202,7 +267,7 @@ def parse_sms_llm(raw: RawSMS) -> ParsedSMS | None:
         parser_version = "llm-0.2.0",
     )
 
-    
+    print(f"Сообщение прочитано успешно: {parsed.raw_body}")
     return parsed
 
 def call_gemini(contents, config) -> dict:

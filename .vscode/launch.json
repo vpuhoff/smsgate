@@ -17,6 +17,16 @@
             "module": "services.xml_watcher.watcher"
         },
         {
+            "name": "parser_worker_dlq",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "services.parser_worker.dlq_worker",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/services/parser_worker:${env:PYTHONPATH}"
+            },
+            "args": ["--reparse"]
+        },
+        {
             "name": "parser_worker",
             "type": "debugpy",
             "request": "launch",

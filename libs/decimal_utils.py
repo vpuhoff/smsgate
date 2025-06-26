@@ -14,7 +14,7 @@ def parse_ambiguous_decimal(num_str: str) -> Decimal:
     # 1. Предварительная очистка: убираем пробелы по краям и внутри
     cleaned_str = num_str.strip().replace(' ', '')
     if not cleaned_str:
-        raise ValueError("Input string cannot be empty")
+        return Decimal("0.0")
 
     # 2. Находим позиции последнего вхождения точки и запятой
     last_dot_pos = cleaned_str.rfind('.')

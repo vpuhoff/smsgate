@@ -55,7 +55,8 @@ def init_sentry(*, release: str | None = None, env: str | None = None) -> None:
         dsn=dsn,
         release=release,
         environment=env or getattr(settings, "env", "local"),
-        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "1.0")),
+        profile_session_sample_rate=float(os.getenv("SENTRY_PROFILE_SAMPLE_RATE", "1.0")),
         max_value_length=4_096,  # guard against huge events
     )
 

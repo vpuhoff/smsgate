@@ -32,6 +32,10 @@ PARSED_FAIL = Counter(
     "sms_parsed_fail_total",
     "Количество SMS, отправленных в DLQ из-за ошибок парсинга",
 )
+PARSED_SKIP = Counter(
+    "sms_parsed_skip_total",
+    "Количество SMS, пропущенных",
+)
 STREAM_LAG = Gauge(
     "sms_parser_stream_lag",
     "Текущее число сообщений, ожидающих разбора в consumer-group",
