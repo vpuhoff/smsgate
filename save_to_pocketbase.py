@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from diskcache import Cache
-from pocketbase import PocketBase
+from pocketbase import 
 
 # --- Настройка логирования ---------------------------------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -57,7 +57,7 @@ def _build_sms_data(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "amount":        str(record.get("amount", 0.0)),
         "currency":      record.get("currency"),
         "balance":       str(record.get("balance", 0.0)),
-        "original_key":  record.get("original_key"),
+        "msg_id":        record.get("msg_id"),
         "original_body": record.get("original_body"),
     }
 
@@ -68,7 +68,7 @@ def _build_transactions(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not pb_dt:
         return None
     return {
-        "transaction_id":   record.get("original_key"),
+        "transaction_id":   record.get("msg_id"),
         "transaction_type": record.get("type", record.get("direction")),
         "amount":           record.get("amount"),
         "currency":         record.get("currency"),
@@ -117,15 +117,15 @@ def sync_cache(cache_dir: str, config: Dict[str, Any], client: PocketBase):
                 skipped += 1
                 continue
 
-            original_key = rec.get("original_key")
-            if not original_key:
-                logging.warning("Отсутствует original_key для %s", key)
+            msg_id = rec.get("msg_id")
+            if not msg_id:
+                logging.warning("Отсутствует msg_id для %s", key)
                 errors += 1
                 continue
 
             # Дедупликация в PB
             try:
-                dup = collection.get_list(query_params={"filter": f'original_key="{original_key}"'}) if "sms_data" == config["collection"] else collection.get_list(query_params={"filter": f'transaction_id="{original_key}"'})
+                dup = collection.get_list(query_params={"filter": f'msg_id="{msg_id}"'}) if "sms_data" == config["collection"] else collection.get_list(query_params={"filter": f'transaction_id="{msg_id}"'})
                 if dup.total_items:
                     rec["status"] = "synced"
                     cache.set(key, rec)

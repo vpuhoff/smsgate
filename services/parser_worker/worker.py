@@ -68,7 +68,8 @@ async def _process_one(
                     # Данный блок обработки для сообщений из DLQ
                     msg.data = msg.data.decode()
                     raw_sms_data = json.loads(msg.data)
-                    raw_sms_data = raw_sms_data['raw']
+                    if 'raw' in raw_sms_data:
+                        raw_sms_data = raw_sms_data['raw']
                 else:
                     # Декодируем и валидируем сырое сообщение
                     raw_sms_data = json.loads(msg.data)

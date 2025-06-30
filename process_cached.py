@@ -246,7 +246,7 @@ def process_sms_from_cache(
 
             if parsed:
                 body_hash = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
-                parsed["original_key"] = key
+                parsed["msg_id"] = key
                 parsed["original_body"] = body_text
                 target_cache.set(body_hash, parsed)
                 message_data["status"] = "processed"

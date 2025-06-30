@@ -4,7 +4,7 @@
 * Authenticates once with admin e-mail/password (from settings).
 * Provides a single public helper – :func:`upsert_parsed_sms` – consumed by the
   PB writer service.  The helper is **idempotent** thanks to a unique
-  ``original_key`` field that we store with every record.
+  ``msg_id`` field that we store with every record.
 
 Dependencies
 ------------
@@ -83,10 +83,10 @@ class PocketBaseClient:
     # -------------------------------------------------------------- business
 
     @retry(wait=wait_exponential(multiplier=1, min=2, max=30), stop=stop_after_attempt(5))
-    def upsert(self, collection: str, record: Mapping[str, Any], *, original_key: str) -> None:
-        """Create or update a record guaranteeing *idempotency* by *original_key*."""
+    def upsert(self, collection: str, record: Mapping[str, Any], *, msg_id: str) -> None:
+        """Create or update a record guaranteeing *idempotency* by *msg_id*."""
         filter_param = {
-            "filter": f"original_key='{original_key}'",
+            "filter": f"msg_id='{msg_id}'",
             "page": 1,
             "perPage": 1,
         }
@@ -200,10 +200,10 @@ class AsyncPocketBaseClient(PocketBaseClient):
     # -------------------------------------------------------------- business
 
     @retry(wait=wait_exponential(multiplier=1, min=2, max=30), stop=stop_after_attempt(5))
-    async def upsert(self, collection: str, record: Mapping[str, Any], *, original_key: str) -> None:
-        """Create or update a record guaranteeing *idempotency* by *original_key*."""
+    async def upsert(self, collection: str, record: Mapping[str, Any], *, msg_id: str) -> None:
+        """Create or update a record guaranteeing *idempotency* by *msg_id*."""
         filter_param = {
-            "filter": f"original_key='{original_key}'",
+            "filter": f"msg_id='{msg_id}'",
             "page": 1,
             "perPage": 1,
         }
@@ -329,7 +329,7 @@ async def upsert_parsed_sms(parsed_sms: ParsedSMS) -> None:  # noqa: D401
     client = await get_async_pb_client()
 
     record: dict[str, Any] = {
-        "original_key": parsed_sms.msg_id,
+        "msg_id": parsed_sms.msg_id,
         "original_body": parsed_sms.raw_body,
         "sender": parsed_sms.sender,
         "datetime": parsed_sms.date.isoformat(),
@@ -346,7 +346,7 @@ async def upsert_parsed_sms(parsed_sms: ParsedSMS) -> None:  # noqa: D401
     collection = COLLECTION_DEBIT
 
     try:
-        await client.upsert(collection, record, original_key=parsed_sms.msg_id)
+        await client.upsert(collection, record, msg_id=parsed_sms.msg_id)
     except RetryError as exc:  # after several attempts
         logger.error("PocketBase upsert gave up: %s", exc)
         sentry_capture(exc, extras={"record": record})

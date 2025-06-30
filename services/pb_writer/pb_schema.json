@@ -119,7 +119,7 @@
       {
         "system": false,
         "id": "exxzrkmu",
-        "name": "original_key",
+        "name": "msg_id",
         "type": "text",
         "required": false,
         "presentable": false,
@@ -146,7 +146,7 @@
       }
     ],
     "indexes": [
-      "CREATE INDEX `idx_yr6UW81` ON `sms_data` (`original_key`)",
+      "CREATE INDEX `idx_yr6UW81` ON `sms_data` (`msg_id`)",
       "CREATE INDEX `idx_HTigVcg` ON `sms_data` (`datetime`)"
     ],
     "listRule": "",
