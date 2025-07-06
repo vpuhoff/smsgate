@@ -13,7 +13,10 @@ async def upsert_parsed_sms(parsed: dict):
     try:
         async with SessionLocal() as sess:
             # Шаг 1: Создаем базовый insert-оператор
-            insert_stmt = insert(SmsData).values(**parsed)
+            fixed = parsed.copy()
+            fixed["datetime"] = fixed.pop("date", None)
+            fixed["original_body"] = fixed.pop("raw_body", None)
+            insert_stmt = insert(SmsData).values(**fixed)
 
             # Шаг 2: Создаем финальный оператор, добавляя ON CONFLICT.
             upsert_stmt = insert_stmt.on_conflict_do_update(
