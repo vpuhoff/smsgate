@@ -18,8 +18,9 @@ Supported debit prefixes so far:
 If you spot a new prefix, just add it to *TRANSACTION_RE*’s alternation list.
 
 Environment variables expected (recommended via a dotenv or Docker secrets):
-    SENTRY_DSN                 ─ your project DSN (optional → Sentry disabled)
-    SENTRY_TRACES_SAMPLE_RATE  ─ overrides traces_sample_rate (defaults to 0.0)
+    ENABLE_SENTRY             ─ set to "true" to enable Sentry (default: false)
+    SENTRY_DSN                ─ your project DSN (required if ENABLE_SENTRY=true)
+    SENTRY_TRACES_SAMPLE_RATE ─ overrides traces_sample_rate (defaults to 0.0)
 """
 
 from __future__ import annotations
@@ -55,6 +56,11 @@ SENTRY_CACHE_DIR = "sentry_event_cache"
 def _init_sentry() -> None:  # noqa: D401 – short description fine
     """Initialise Sentry SDK with a *very* small wrapper to persist events locally."""
 
+    # Проверяем, включен ли Sentry
+    if not os.environ.get("ENABLE_SENTRY", "false").lower() in ("true", "1", "yes"):
+        logger.info("Sentry disabled – ENABLE_SENTRY not set to true")
+        return
+        
     if not SENTRY_DSN or sentry_sdk is None:  # type: ignore[truthy-bool]
         logger.info("Sentry disabled – either DSN not set or sentry-sdk missing")
         return

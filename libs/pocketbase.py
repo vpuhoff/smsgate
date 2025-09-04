@@ -54,30 +54,14 @@ class PocketBaseClient:
         self._client = httpx.Client(base_url=self._base_url, timeout=10.0)
         self._token: str | None = None
 
-    # ------------------------------------------------------------------ auth
-    def _ensure_token(self) -> None:
-        if self._token is not None:
-            return
-        resp = self._client.post(
-            "/api/admins/auth-with-password",
-            json={"identity": self._email, "password": self._password},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self._token = data["token"]
-        self._client.headers["Authorization"] = f"Bearer {self._token}"
-
     # ------------------------------------------------------------- low level
     def _get(self, path: str, **kwargs: Any) -> httpx.Response:
-        self._ensure_token()
         return self._client.get(path, **kwargs)
 
     def _post(self, path: str, **kwargs: Any) -> httpx.Response:
-        self._ensure_token()
         return self._client.post(path, **kwargs)
 
     def _patch(self, path: str, **kwargs: Any) -> httpx.Response:
-        self._ensure_token()
         return self._client.patch(path, **kwargs)
 
     # -------------------------------------------------------------- business
@@ -117,7 +101,6 @@ class PocketBaseClient:
 
     def get_records_since(self, collection: str, since_pb_str: str) -> List[Mapping[str, Any]]:
         """Получает записи из коллекции, у которых поле datetime > since_pb_str."""
-        self._ensure_token()
         items: list[Mapping[str, Any]] = []
         page = 1
         per_page = 500
@@ -170,31 +153,14 @@ class AsyncPocketBaseClient(PocketBaseClient):
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=10.0)
         self._token: str | None = None
 
-    # ------------------------------------------------------------------ auth
-    async def _ensure_token(self) -> None:
-        if self._token is not None:
-            return
-        # `await` для асинхронного вызова
-        resp = await self._client.post(
-            "/api/admins/auth-with-password",
-            json={"identity": self._email, "password": self._password},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        self._token = data["token"]
-        self._client.headers["Authorization"] = f"Bearer {self._token}"
-
     # ------------------------------------------------------------- low level
     async def _get(self, path: str, **kwargs: Any) -> httpx.Response:
-        await self._ensure_token()
         return await self._client.get(path, **kwargs)
 
     async def _post(self, path: str, **kwargs: Any) -> httpx.Response:
-        await self._ensure_token()
         return await self._client.post(path, **kwargs)
 
     async def _patch(self, path: str, **kwargs: Any) -> httpx.Response:
-        await self._ensure_token()
         return await self._client.patch(path, **kwargs)
 
     # -------------------------------------------------------------- business
@@ -235,7 +201,6 @@ class AsyncPocketBaseClient(PocketBaseClient):
 
     async def get_records_since(self, collection: str, since_pb_str: str) -> List[Mapping[str, Any]]:
         """Получает записи из коллекции, у которых поле datetime > since_pb_str."""
-        await self._ensure_token()
         items: list[Mapping[str, Any]] = []
         page = 1
         per_page = 500

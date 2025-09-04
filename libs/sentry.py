@@ -43,10 +43,15 @@ def init_sentry(*, release: str | None = None, env: str | None = None) -> None:
     """Initialise Sentry SDK once per process.
 
     If neither *SENTRY_DSN* environment variable nor *settings.sentry_dsn* is
-    present, the function becomes a no-op (and :func:`sentry_capture` will do
+    present, or if *ENABLE_SENTRY* is False, the function becomes a no-op (and :func:`sentry_capture` will do
     nothing as well).
     """
     settings = get_settings()
+    
+    # Проверяем, включен ли Sentry
+    if not getattr(settings, "enable_sentry", False):
+        return  # Sentry отключен
+    
     dsn = os.getenv("SENTRY_DSN") or getattr(settings, "sentry_dsn", "")
     if not dsn:
         return  # Local run without Sentry – silently skip

@@ -9,7 +9,8 @@ Environment variables
 ---------------------
     HOOKDECK_API_KEY   – your Hookdeck API key
     HOOKDECK_WEBHOOK_ID – webhook ID to pull events for
-    SENTRY_DSN         – (optional) Sentry DSN; if absent, Sentry is disabled
+    ENABLE_SENTRY      – (optional) set to "true" to enable Sentry; defaults to "false"
+SENTRY_DSN         – (required if ENABLE_SENTRY=true) Sentry DSN
 
 Usage
 -----
@@ -41,9 +42,13 @@ import diskcache as dc
 # Sentry setup (optional)
 # ---------------------------------------------------------------------------
 SENTRY_DSN = os.getenv("SENTRY_DSN")
-if SENTRY_DSN:
+ENABLE_SENTRY = os.getenv("ENABLE_SENTRY", "false").lower() in ("true", "1", "yes")
+
+if SENTRY_DSN and ENABLE_SENTRY:
     sentry_logging = LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
     sentry_init(dsn=SENTRY_DSN, integrations=[sentry_logging], traces_sample_rate=0.05)
+else:
+    logger.info("Sentry disabled – either DSN not set or ENABLE_SENTRY not true")
 
 # ---------------------------------------------------------------------------
 # Logging

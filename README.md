@@ -73,7 +73,8 @@ The `docker-compose.yml` file orchestrates the following services:
     GEMINI_API_KEY=your_gemini_api_key
 
     # Sentry for Error Tracking (Optional)
-    SENTRY_DSN=your_sentry_dsn
+SENTRY_DSN=your_sentry_dsn
+ENABLE_SENTRY=false  # Set to true to enable Sentry error tracking
     ```
 
 3.  **Build and Run the Stack:**

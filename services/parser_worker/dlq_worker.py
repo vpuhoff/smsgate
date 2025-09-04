@@ -22,7 +22,7 @@ from typing import Any
 from nats.aio.client import Client as NATS
 from nats.js.api import DeliverPolicy
 from nats.aio.msg import Msg
-import sentry_sdk                                              # type: ignore
+# import sentry_sdk                                              # type: ignore
 
 # --- импорт всего необходимого из штатного воркера ------------
 from .worker import _process_one, get_settings, ensure_stream  # noqa: F401
@@ -66,9 +66,14 @@ async def _handle_dlq_msg(nc: NATS, msg: Msg, reparse: bool) -> None:
             # Сначала пытаемся прочитать как JSON, иначе оставляем строкой.
             try:
                 logger.info("🔄  Повторный парсинг через _process_one …")
-                sentry_sdk.profiler.start_profiler()
-                await _process_one(nc, msg)
-                sentry_sdk.profiler.stop_profiler()
+                # Профилирование Sentry (только если включено)
+                try:
+                    import sentry_sdk
+                    sentry_sdk.profiler.start_profiler()
+                    await _process_one(nc, msg)
+                    sentry_sdk.profiler.stop_profiler()
+                except ImportError:
+                    await _process_one(nc, msg)
             except Exception as err:
                 logger.exception("Сбой при повторном парсинге: %s", err)
 
@@ -104,7 +109,9 @@ async def _amain(argv: list[str] | None = None) -> None:
 
     _ = get_settings()                      # прогреваем конфиг
 
-    sentry_sdk.init(traces_sample_rate=0.0)  # можно отключить трейсинг
+    # Инициализируем Sentry через наш модуль (будет no-op если отключен)
+    from libs.sentry import init_sentry
+    init_sentry(release="dlq_worker@1.0.0")
 
     nc = await get_nats_connection()
     await ensure_stream(nc)                 # на всякий случай

@@ -16,8 +16,6 @@ from typing import Any
 
 from nats.aio.client import Client as NATS
 from nats.aio.msg import Msg
-import sentry_sdk
-
 from libs.config import get_settings
 from libs.models import ParsedSMS, RawSMS
 from libs.nats_utils import (
@@ -30,6 +28,31 @@ from libs.nats_utils import (
 )
 from libs.gemini_parser import BrokenMessage, parse_sms_llm
 from libs.sentry import init_sentry, sentry_capture
+
+# Вспомогательные функции для условного использования Sentry
+def _start_transaction_if_enabled(op: str, name: str):
+    """Запускает транзакцию Sentry только если он включен."""
+    try:
+        import sentry_sdk
+        return sentry_sdk.start_transaction(op=op, name=name)
+    except ImportError:
+        # Создаем пустой контекстный менеджер
+        class DummyContext:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        return DummyContext()
+
+def _start_span_if_enabled(name: str):
+    """Запускает span Sentry только если он включен."""
+    try:
+        import sentry_sdk
+        return sentry_sdk.start_span(name=name)
+    except ImportError:
+        # Создаем пустой контекстный менеджер
+        class DummyContext:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        return DummyContext()
 
 from metrics import (
     ACK_PENDING,
@@ -54,14 +77,14 @@ async def _process_one(
 ) -> None:
     """Parse *one* Raw SMS from a NATS message and publish the result."""
     
-    with sentry_sdk.start_transaction(op="task", name="process_parsing"):
-        with sentry_sdk.start_span(name="check_stream"):
+    with _start_transaction_if_enabled(op="task", name="process_parsing"):
+        with _start_span_if_enabled(name="check_stream"):
             js = nc.jetstream()
 
             await ensure_stream(nc)
 
         logger.debug("⏱  V: start-validate %s", msg.metadata.sequence)
-        with sentry_sdk.start_span(name="validate"):
+        with _start_span_if_enabled(name="validate"):
             try:
                 logger.info(f"Обрабатываем сообщение {msg}")
                 if isinstance(msg.data, bytes):
@@ -104,7 +127,7 @@ async def _process_one(
 
         logger.info("Начинаем парсинг с LLM")
         # Основная логика парсинга
-        with sentry_sdk.start_span(name="parsing"):
+        with _start_span_if_enabled(name="parsing"):
             with PROCESSING_TIME.time():
                 try:
                     with GEMINI_LATENCY.time():
@@ -135,7 +158,7 @@ async def _process_one(
                     return
 
         # Успешный парсинг: обогащаем и публикуем
-        with sentry_sdk.start_span(name="validate_parsed"):
+        with _start_span_if_enabled(name="validate_parsed"):
             try:
                 parsed_sms = ParsedSMS(**parsed.model_dump())
             except Exception as err:
@@ -145,7 +168,7 @@ async def _process_one(
                 PARSED_FAIL.inc()
                 await msg.ack()
                 return
-        with sentry_sdk.start_span(name="publish"):
+        with _start_span_if_enabled(name="publish"):
             if not isinstance(parsed_sms.date, datetime):
                 logger.warning("Не считалась дата: %s", raw_sms.body[:60])
             if parsed.date > datetime.now():

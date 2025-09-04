@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # ── Sentry ───────────────────────────────────────────────────────────────
     sentry_dsn: Optional[str] = Field(None, env="SENTRY_DSN") # type: ignore
+    enable_sentry: bool = Field(False, env="ENABLE_SENTRY") # type: ignore
     gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY") # type: ignore
 
     # ── XML-backup watcher ───────────────────────────────────────────────────
