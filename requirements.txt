@@ -107,7 +107,7 @@ prometheus-client==0.22.1
     # via smsgate (pyproject.toml)
 psycopg2-binary==2.9.10
     # via smsgate (pyproject.toml)
-pyasn1==0.6.1
+pyasn1==0.6.2
     # via
     #   pyasn1-modules
     #   rsa
